@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+
+# uv / venv
+.venv/
+venv/
+
+# Outputs (regenerable)
+v2/output/*
+v3/output/*
+!v?/output/.gitkeep
+
+# Data (sensitive — depends on real data)
+data/raw/rawdata.csv
+
+# Logs / temp
+*.log
+.DS_Store
+Thumbs.db

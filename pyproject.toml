@@ -1,0 +1,29 @@
+[project]
+name = "demand-forecast-simple"
+version = "0.1.0"
+description = "Standalone simple demand-forecasting playground (v1, v2, v3, hybrid)"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    # Core
+    "pandas>=2.2,<3.0",
+    "numpy>=1.26,<2.0",
+    "scipy>=1.12",
+    "scikit-learn>=1.4",
+    "matplotlib>=3.8",
+
+    # Gradient boosting models
+    "lightgbm>=4.3",
+    "xgboost>=3.0",
+    "catboost>=1.2",
+
+    # NeuralProphet (brings torch + pytorch-lightning)
+    "neuralprophet>=0.9",
+
+    # Mainland-China holiday calendar (for v2/v3 block features)
+    "chinese-calendar>=1.10",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
