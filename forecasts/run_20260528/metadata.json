@@ -1,0 +1,22 @@
+{
+  "run_date": "2026-05-28",
+  "model": "hybrid_6model_selection_anchor",
+  "horizon_days": 28,
+  "historical_data_range": [
+    "2024-01-01",
+    "2026-05-28"
+  ],
+  "forecast_range": [
+    "2026-05-29",
+    "2026-06-25"
+  ],
+  "p50_min": 6550.869155784938,
+  "p50_max": 7752.772452542056,
+  "p50_mean": 6948.691654716911,
+  "p50_sum": 194563.36633207352,
+  "use_reservations": false,
+  "use_weather": true,
+  "generated_at": "2026-06-16T14:42:05",
+  "initial_forecast": false,
+  "initial_forecast_range": null
+}

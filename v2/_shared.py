@@ -24,6 +24,7 @@ HERE = Path(__file__).parent
 ROOT = HERE.parent  # project root
 DATA_DEMAND = ROOT / "data" / "raw" / "rawdata.csv"
 DATA_RES = ROOT / "data" / "raw" / "reservations.csv"
+DATA_TYPHOONS = ROOT / "data" / "raw" / "typhoons.csv"
 OUT = HERE / "output"
 OUT.mkdir(parents=True, exist_ok=True)
 
@@ -31,6 +32,14 @@ HOLDOUT_DAYS = 28
 
 # ----- Toggle: include reservation features (default OFF per user request)
 USE_RESERVATIONS = False
+# ------------------------------------------------------------------------
+
+# ----- Toggle: include weather features.
+# When True, expects data/raw/weather.csv with at minimum:
+#   date, temp_max, temp_min, temp_avg, precip_mm, typhoon_signal
+# Missing future dates are filled with day-of-year climatology computed
+# from the available history. Missing column -> NaN (tree models handle).
+USE_WEATHER = True
 # ------------------------------------------------------------------------
 
 # Holiday config (same as v1)
@@ -393,6 +402,51 @@ def add_reservation_features(df: pd.DataFrame, snap: pd.DataFrame) -> pd.DataFra
 
 
 # ============================================================================
+# Weather features (only if USE_WEATHER=True)
+#
+# Single binary feature kept: is_typhoon_t8plus
+#   1 if HKO Tropical Cyclone Warning Signal 8 (or 9 / 10) was active on the
+#   target date, 0 otherwise.
+#
+# Source: data/raw/typhoons.csv (produced by scrape_typhoon.py from HKO).
+# When that file is missing, the feature is 0 for every row -- model proceeds.
+#
+# All other weather features (temperature, humidity, wind, precipitation,
+# rolling weather averages, T3 signal, climatology flag) were removed: in
+# Macau, T8+ is the only weather signal that materially moves casino demand.
+# Lesser weather variables added noise and feature-importance churn without
+# moving backtested MAPE.
+# ============================================================================
+
+
+def _load_typhoons() -> pd.DataFrame:
+    """Load data/raw/typhoons.csv (date, typhoon_name, highest_signal).
+    Returns empty DataFrame if the file is missing -- is_typhoon_t8plus
+    will then default to 0 for every row."""
+    if not DATA_TYPHOONS.exists():
+        print(f"  [weather] {DATA_TYPHOONS} not found "
+              "— is_typhoon_t8plus will be 0 everywhere")
+        return pd.DataFrame()
+    df = pd.read_csv(DATA_TYPHOONS, parse_dates=["date"])
+    return df.sort_values("date").reset_index(drop=True)
+
+
+def add_weather_features(df: pd.DataFrame, typhoons: pd.DataFrame,
+                          date_col: str = "target_date") -> pd.DataFrame:
+    """Attach is_typhoon_t8plus to each row by joining on target_date."""
+    if typhoons.empty:
+        df["is_typhoon_t8plus"] = 0
+        return df
+
+    t8_dates = set(pd.to_datetime(
+        typhoons.loc[typhoons["highest_signal"] >= 8, "date"]
+    ))
+    target = pd.to_datetime(df[date_col])
+    df["is_typhoon_t8plus"] = target.isin(t8_dates).astype("int8")
+    return df
+
+
+# ============================================================================
 # Matrix builder
 # ============================================================================
 def build_matrix(demand: pd.DataFrame, holdout_days: int = HOLDOUT_DAYS) -> pd.DataFrame:
@@ -420,6 +474,16 @@ def build_matrix(demand: pd.DataFrame, holdout_days: int = HOLDOUT_DAYS) -> pd.D
         mat = add_reservation_features(mat, snap)
     else:
         print("  [reservations] USE_RESERVATIONS=False — skipping")
+
+    if USE_WEATHER:
+        typhoons = _load_typhoons()
+        if not typhoons.empty:
+            t8plus = (typhoons["highest_signal"] >= 8).sum()
+            print(f"  [weather] typhoons.csv: {len(typhoons)} affected day(s), "
+                  f"{t8plus} at T8+")
+        mat = add_weather_features(mat, typhoons)
+    else:
+        print("  [weather] USE_WEATHER=False — skipping")
 
     mat["y"] = mat["target_date"].map(date_to_demand)
     return mat
