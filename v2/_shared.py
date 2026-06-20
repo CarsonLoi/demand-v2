@@ -345,20 +345,51 @@ def add_interaction_features(df, date_to_demand):
 # ============================================================================
 # Reservation features (only if USE_RESERVATIONS=True)
 # ============================================================================
+# Max lead time (days) kept from reservation snapshots. Data with lead 1..30 is
+# fine; anything beyond this is dropped (and missing leads simply yield NaN).
+RES_MAX_LEAD = 60
+
+
 def _load_and_aggregate_reservations() -> pd.DataFrame:
-    """Load + aggregate reservations (handles both patron-level and pre-aggregated)."""
+    """Load + aggregate reservations (handles both patron-level and pre-aggregated).
+
+    Robust to: missing file, missing/blank rooms_otb, duplicate snapshots, and
+    inhouse dates with no coverage. Returns an empty frame if unusable — the
+    model then runs with NaN reservation features (tree models handle NaN)."""
     if not DATA_RES.exists():
-        print(f"  [reservations] {DATA_RES} not found — skipping")
+        print(f"  [reservations] {DATA_RES} not found — features will be NaN")
         return pd.DataFrame()
-    res = pd.read_csv(DATA_RES, parse_dates=["update_date", "inhouse_date"])
+    try:
+        res = pd.read_csv(DATA_RES, parse_dates=["update_date", "inhouse_date"])
+    except (ValueError, KeyError) as e:
+        print(f"  [reservations] could not parse {DATA_RES} ({e}) — features will be NaN")
+        return pd.DataFrame()
+
     if "patron_id" in res.columns:
-        snap = res.groupby(["update_date", "inhouse_date"], as_index=False).size().rename(
-            columns={"size": "rooms_otb"}
-        )
-    else:
+        # Patron-level: count rows per (update_date, inhouse_date)
+        snap = res.dropna(subset=["update_date", "inhouse_date"]).groupby(
+            ["update_date", "inhouse_date"], as_index=False).size().rename(
+            columns={"size": "rooms_otb"})
+    elif "rooms_otb" in res.columns:
         snap = res[["update_date", "inhouse_date", "rooms_otb"]].copy()
+        snap["rooms_otb"] = pd.to_numeric(snap["rooms_otb"], errors="coerce")
+    else:
+        print("  [reservations] need either 'rooms_otb' (Format A) or 'patron_id' "
+              "(Format B) column — features will be NaN")
+        return pd.DataFrame()
+
+    # Drop rows missing any key/value; dedupe (keep the last snapshot for a pair)
+    before = len(snap)
+    snap = snap.dropna(subset=["update_date", "inhouse_date", "rooms_otb"])
+    snap = snap.drop_duplicates(subset=["update_date", "inhouse_date"], keep="last")
     snap["lead_time"] = (snap["inhouse_date"] - snap["update_date"]).dt.days
-    snap = snap[(snap["lead_time"] >= 1) & (snap["lead_time"] <= 60)].reset_index(drop=True)
+    snap = snap[(snap["lead_time"] >= 1) & (snap["lead_time"] <= RES_MAX_LEAD)]
+    snap = snap.reset_index(drop=True)
+    dropped = before - len(snap)
+    if dropped > 0:
+        print(f"  [reservations] dropped {dropped} invalid/duplicate/out-of-lead row(s)")
+    if not snap.empty:
+        print(f"  [reservations] lead range {int(snap.lead_time.min())}..{int(snap.lead_time.max())} days")
     return snap
 
 
@@ -381,11 +412,18 @@ def add_reservation_features(df: pd.DataFrame, snap: pd.DataFrame) -> pd.DataFra
         snap_date_prev = T - pd.Timedelta(days=int(h) + 8)
         v_now = snap_lookup.get((snap_date, T), np.nan)
         v_prev = snap_lookup.get((snap_date_prev, T), np.nan)
-        otb[i] = v_now
-        if not (np.isnan(v_now) or np.isnan(v_prev)):
-            pickup_7d[i] = v_now - v_prev
+        if v_now is not None and not (isinstance(v_now, float) and np.isnan(v_now)):
+            otb[i] = float(v_now)
+        if (v_now is not None and v_prev is not None
+                and not np.isnan(float(v_now)) and not np.isnan(float(v_prev))):
+            pickup_7d[i] = float(v_now) - float(v_prev)
     df["res_otb"] = otb
     df["res_pickup_7d"] = pickup_7d
+
+    # Coverage diagnostic: how many rows actually found an OTB snapshot.
+    n_cov = int(np.sum(~np.isnan(otb)))
+    print(f"  [reservations] res_otb coverage: {n_cov:,}/{len(df):,} rows "
+          f"({100*n_cov/max(len(df),1):.0f}%); missing snapshots -> NaN (handled)")
 
     # DOW z-score (across same-DOW history; in-distribution)
     dow = pd.to_datetime(df["target_date"]).dt.weekday.to_numpy()

@@ -622,12 +622,6 @@ def main() -> int:
         args.full = True
 
     demand = load_demand()
-    if args.run_date:
-        run_date = pd.Timestamp(args.run_date)
-    else:
-        # Default: assume today is the day after the last data point
-        run_date = demand.date.max()
-    run_date = run_date.normalize()
 
     initial_range = None
     if args.initial_forecast:
@@ -635,6 +629,19 @@ def main() -> int:
                          pd.Timestamp(args.initial_forecast[1]).normalize())
         if initial_range[0] > initial_range[1]:
             parser.error("--initial-forecast FROM must be on or before TO")
+        span = (initial_range[1] - initial_range[0]).days + 1
+        if span != HOLDOUT_DAYS:
+            print(f"  [warning] initial-forecast range spans {span} days, but the model "
+                  f"forecasts {HOLDOUT_DAYS} days from run-date+1; only the overlap is charted.")
+
+    # run-date precedence: explicit --run-date, else derive from initial FROM (FROM-1),
+    # else the last row of rawdata.csv.
+    if args.run_date:
+        run_date = pd.Timestamp(args.run_date).normalize()
+    elif initial_range:
+        run_date = (initial_range[0] - pd.Timedelta(days=1)).normalize()
+    else:
+        run_date = demand.date.max().normalize()
 
     print(f"\n=== Forecast run ===")
     if initial_range:
