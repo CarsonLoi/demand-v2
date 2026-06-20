@@ -52,11 +52,13 @@ HOLIDAY_ANCHORS = {
     "Christmas":  [pd.Timestamp(d) for d in ["2024-12-25", "2025-12-25"]],
     "ChingMing":  [pd.Timestamp(d) for d in ["2024-04-04", "2025-04-04", "2026-04-04"]],
     "Easter":     [pd.Timestamp(d) for d in ["2024-03-31", "2025-04-20", "2026-04-05"]],
+    "DragonBoat": [pd.Timestamp(d) for d in ["2024-06-10", "2025-05-31", "2026-06-19"]],
 }
 HOLIDAY_WINDOWS = {
     "CNY":        (-7, 10), "GoldenWeek": (0, 6), "Labour": (0, 4),
     "MidAutumn":  (-1, 1),  "NewYear":    (0, 0), "Christmas": (-3, 3),
     "ChingMing":  (0, 0),   "Easter":     (-2, 1),
+    "DragonBoat": (-2, 1),   # soft pre-1~2 days captured by the -2 lookback
 }
 
 LAG_DAYS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 21, 28, 35, 42, 56, 91, 182, 365, 728]
@@ -180,7 +182,7 @@ def add_holiday_flags(df: pd.DataFrame, date_col: str = "target_date") -> pd.Dat
             flag |= target.isin(window).astype("int8")
         df[f"is_{name}"] = flag
 
-    for name in ("CNY", "GoldenWeek", "Labour"):
+    for name in ("CNY", "GoldenWeek", "Labour", "DragonBoat"):
         ws, we = HOLIDAY_WINDOWS[name]
         for offset in range(ws, we + 1):
             col = f"{name}_d{offset:+d}".replace("+", "p").replace("-", "m")
