@@ -538,11 +538,21 @@ def make_tracking_chart(demand: pd.DataFrame) -> None:
         return
 
     initial = initials[-1]            # current cycle's frozen baseline
-    latest = runs[-1]                 # most recent forecast overall
     win_from, win_to = initial["range"]   # the scheduling window
 
     init_p = pd.read_csv(initial["pred_path"], parse_dates=["date"])
-    late_p = pd.read_csv(latest["pred_path"], parse_dates=["date"])
+
+    # 'latest' = the most recent run (after the initial) whose forecast actually
+    # overlaps the scheduling window — so stray runs for other periods don't
+    # blank out the comparison line.
+    latest, late_p = initial, init_p
+    for r in reversed(runs):
+        if r["run_date"] <= initial["run_date"]:
+            continue
+        cand = pd.read_csv(r["pred_path"], parse_dates=["date"])
+        if ((cand.date >= win_from) & (cand.date <= win_to)).any():
+            latest, late_p = r, cand
+            break
 
     # Clip every series to the scheduling window
     init_p = init_p[(init_p.date >= win_from) & (init_p.date <= win_to)]
