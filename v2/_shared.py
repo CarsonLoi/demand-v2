@@ -40,6 +40,11 @@ USE_RESERVATIONS = False
 # Missing future dates are filled with day-of-year climatology computed
 # from the available history. Missing column -> NaN (tree models handle).
 USE_WEATHER = True
+# Typhoon signals are available AHEAD of time via HKO weather forecasts, so a
+# future forecast-window signal is a legitimate forward-looking feature (NOT
+# leakage) and is kept by default. Set True ONLY for a strict hindsight-free
+# backtest where typhoons.csv holds actuals rather than forecasts.
+MASK_FUTURE_TYPHOON = False
 # ------------------------------------------------------------------------
 
 # Holiday config (same as v1)
@@ -352,8 +357,14 @@ def add_interaction_features(df, date_to_demand):
 RES_MAX_LEAD = 60
 
 
-def _load_and_aggregate_reservations() -> pd.DataFrame:
+def _load_and_aggregate_reservations(as_of: pd.Timestamp | None = None) -> pd.DataFrame:
     """Load + aggregate reservations (handles both patron-level and pre-aggregated).
+
+    as_of: if given, drop every snapshot with update_date > as_of. This mirrors
+    the demand-side `train_dates_set = dates <= run_date` filter — it's what
+    prevents a run's res_dow_zscore (which pools OTB across the whole matrix)
+    from being normalized using pacing snapshots that didn't exist yet at
+    forecast time. Pass the run_date here.
 
     Robust to: missing file, missing/blank rooms_otb, duplicate snapshots, and
     inhouse dates with no coverage. Returns an empty frame if unusable — the
@@ -386,10 +397,19 @@ def _load_and_aggregate_reservations() -> pd.DataFrame:
     snap = snap.drop_duplicates(subset=["update_date", "inhouse_date"], keep="last")
     snap["lead_time"] = (snap["inhouse_date"] - snap["update_date"]).dt.days
     snap = snap[(snap["lead_time"] >= 1) & (snap["lead_time"] <= RES_MAX_LEAD)]
+
+    if as_of is not None:
+        before_asof = len(snap)
+        snap = snap[snap["update_date"] <= as_of]
+        cut = before_asof - len(snap)
+        if cut > 0:
+            print(f"  [reservations] filtered out {cut} snapshot(s) with "
+                  f"update_date > {as_of.date()} (run-date leakage guard)")
+
     snap = snap.reset_index(drop=True)
     dropped = before - len(snap)
     if dropped > 0:
-        print(f"  [reservations] dropped {dropped} invalid/duplicate/out-of-lead row(s)")
+        print(f"  [reservations] dropped {dropped} invalid/duplicate/out-of-lead/future row(s)")
     if not snap.empty:
         print(f"  [reservations] lead range {int(snap.lead_time.min())}..{int(snap.lead_time.max())} days")
     return snap
@@ -472,8 +492,15 @@ def _load_typhoons() -> pd.DataFrame:
 
 
 def add_weather_features(df: pd.DataFrame, typhoons: pd.DataFrame,
+                          as_of: pd.Timestamp | None = None,
                           date_col: str = "target_date") -> pd.DataFrame:
-    """Attach is_typhoon_t8plus to each row by joining on target_date."""
+    """Attach is_typhoon_t8plus to each row by joining on target_date.
+
+    as_of: the run_date. Typhoon signals ARE available ahead of time via HKO
+    weather forecasts, so future forecast-window signals are legitimate (kept
+    by default). Only when MASK_FUTURE_TYPHOON is True are forecast rows
+    (target_date > as_of) masked to 0 — for a strict hindsight-free backtest
+    where typhoons.csv holds actuals rather than forecasts."""
     if typhoons.empty:
         df["is_typhoon_t8plus"] = 0
         return df
@@ -482,14 +509,28 @@ def add_weather_features(df: pd.DataFrame, typhoons: pd.DataFrame,
         typhoons.loc[typhoons["highest_signal"] >= 8, "date"]
     ))
     target = pd.to_datetime(df[date_col])
-    df["is_typhoon_t8plus"] = target.isin(t8_dates).astype("int8")
+    flag = target.isin(t8_dates).astype("int8")
+    if MASK_FUTURE_TYPHOON and as_of is not None:
+        masked = int((flag.eq(1) & (target > as_of)).sum())
+        flag = flag.where(target <= as_of, 0).astype("int8")
+        if masked > 0:
+            print(f"  [weather] MASK_FUTURE_TYPHOON: masked {masked} future "
+                  f"typhoon row(s) (target_date > {pd.Timestamp(as_of).date()})")
+    df["is_typhoon_t8plus"] = flag.astype("int8")
     return df
 
 
 # ============================================================================
 # Matrix builder
 # ============================================================================
-def build_matrix(demand: pd.DataFrame, holdout_days: int = HOLDOUT_DAYS) -> pd.DataFrame:
+def build_matrix(demand: pd.DataFrame, holdout_days: int = HOLDOUT_DAYS,
+                  as_of: pd.Timestamp | None = None) -> pd.DataFrame:
+    """as_of: the run_date. Reservation snapshots with update_date > as_of are
+    excluded — mirrors the demand-side train_dates_set <= run_date filter, so
+    a run never has access to booking-pacing data that didn't exist yet.
+    If omitted, defaults to demand's max date (no-op for a single fresh run)."""
+    if as_of is None:
+        as_of = demand["date"].max()
     date_to_demand = dict(zip(demand["date"], demand["demand"].astype(float)))
     date_to_floor = dict(zip(demand["date"], demand["floortables"].astype(float)))
 
@@ -508,8 +549,8 @@ def build_matrix(demand: pd.DataFrame, holdout_days: int = HOLDOUT_DAYS) -> pd.D
     mat = add_interaction_features(mat, date_to_demand)
 
     if USE_RESERVATIONS:
-        print("  [reservations] loading + aggregating...")
-        snap = _load_and_aggregate_reservations()
+        print(f"  [reservations] loading + aggregating (as_of={as_of.date()})...")
+        snap = _load_and_aggregate_reservations(as_of=as_of)
         print(f"  [reservations] {len(snap):,} snapshot rows")
         mat = add_reservation_features(mat, snap)
     else:
@@ -521,7 +562,7 @@ def build_matrix(demand: pd.DataFrame, holdout_days: int = HOLDOUT_DAYS) -> pd.D
             t8plus = (typhoons["highest_signal"] >= 8).sum()
             print(f"  [weather] typhoons.csv: {len(typhoons)} affected day(s), "
                   f"{t8plus} at T8+")
-        mat = add_weather_features(mat, typhoons)
+        mat = add_weather_features(mat, typhoons, as_of=as_of)
     else:
         print("  [weather] USE_WEATHER=False — skipping")
 

@@ -381,7 +381,7 @@ def make_forecast(run_date: pd.Timestamp, use_hybrid: bool = False,
         padded = demand.copy()
 
     print("  Building feature matrix...")
-    mat = build_matrix(padded, holdout_days=HOLDOUT_DAYS)
+    mat = build_matrix(padded, holdout_days=HOLDOUT_DAYS, as_of=run_date)
 
     # Train on all historical data up to and including run_date.
     # In production this is a no-op (last_data == run_date); on backtest reruns
