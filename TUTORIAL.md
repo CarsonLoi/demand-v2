@@ -18,6 +18,14 @@ Everything runs from **one script (`forecast.py`)** reading **one data file
 (`data/raw/rawdata.csv`)**. The model retrains from scratch every run — there is
 no separate "training" step to manage.
 
+**Chinese New Year gets special handling in every mode.** Demand falls to
+43–49% of normal in the days before CNY, and there are only 1–2 prior CNY
+occurrences to learn that shape from — too few for the model to learn
+reliably on its own. So after the normal forecast is produced, CNY-window
+days are blended 80/20 toward a corrected "last year's CNY, adjusted for this
+year's weekday and level" estimate. This is automatic and touches only
+CNY-window days — you don't need to do anything to get it. See Section 3.
+
 There are three accuracy tiers, trading speed for precision:
 
 | Command | Time | What it does | When to use |
@@ -84,8 +92,25 @@ Only needed after a typhoon season, or if a T8+ signal occurred recently:
 uv run python scrape_typhoon.py
 ```
 
-This rebuilds `data\raw\typhoons.csv` from the Hong Kong Observatory. The model
-uses one weather feature, `is_typhoon_t8plus`. (See README "Weather data".)
+This rebuilds `data\raw\typhoons.csv` from the Hong Kong Observatory.
+
+**The model does not use this file as a feature.** Measured impact of a T8+ day
+ranges from +10% to −87%, driven by whether operations were suspended rather
+than by the signal itself — so typhoons are handled as a manual override
+instead. Keep the file current because it is what lets you identify and audit
+those days. See README "Typhoons".
+
+If a typhoon is forecast inside your window:
+
+```powershell
+uv run python typhoon_override.py --dates 2026-08-12 --show      # inspect
+uv run python typhoon_override.py --dates 2026-08-12 --closure   # ops suspended
+uv run python typhoon_override.py --dates 2026-08-12 --signal-t8 # ops continuing
+```
+
+After a closure, just append the actual to `rawdata.csv` as normal. (Excluding
+closure days from the feature series was tested and made accuracy worse — see
+README "Typhoons".)
 
 ### Step 3 — Run the forecast
 
@@ -157,15 +182,41 @@ equally, it learns *which 2 models are best for each weekday-and-lead-time
 combination* and averages only those. A model that's great at "Saturday, 1 day
 ahead" may be poor at "Tuesday, 14 days ahead" — selection exploits that.
 
-**B. Holiday anchor.** Base models systematically under-predict fixed-date
+**B. Fixed-holiday anchor.** Base models systematically under-predict fixed-date
 holiday spikes (Labour Day, Golden Week, New Year, Christmas, Ching Ming). The
 anchor nudges those days toward *last year's same date × recent growth*, which
 is a far better holiday estimate. Lunar holidays (Chinese New Year, Mid-Autumn)
-are left alone because last-year's-date doesn't line up for them.
+are excluded from THIS anchor because last-year's-date doesn't line up for them
+— a fixed-date lag genuinely misaligns by up to 3 weeks for a moving holiday.
 
 **Both are calibrated honestly** — on a recent *validation* slice of history with
 known answers, never on the future being predicted. That's why this mode takes
 ~2× longer: it does a calibration round, then a production round.
+
+### The CNY anchor — separate mechanism, runs in every mode
+
+Chinese New Year needed a different fix, and it isn't gated behind
+`--blend selection` — it runs in the default fast mode too. Instead of a
+fixed-date lag, it matches each CNY-window day to the *same position within*
+last year's CNY (day −3 this year to day −3 last year, whatever the calendar
+date), corrects for the fact that the two years likely fall on different
+weekdays, and blends 80% toward that corrected estimate. This is why it
+transfers correctly even though CNY moves by up to 19 days year to year — see
+`v2/_shared.py`'s `apply_moving_anchor` / `ANCHOR_HOLIDAYS`.
+
+Measured effect, held out (a prior year calibrated the 0.80 weight, applied
+unchanged to the year being scored):
+
+| | before | after |
+|---|---|---|
+| CNY, short lead | 11.9% MAPE | **6.9%** |
+| CNY, long lead | 16.1% MAPE | **7.4%** |
+| non-CNY days | unchanged | unchanged |
+
+It was deliberately **not** extended to Mid-Autumn, Dragon Boat, or Easter —
+tested, and it made those three *worse* in 7 of 12 cases, because they move
+demand only mildly and the model already handles them adequately; nudging
+them toward a thin 1–2-year sample added noise instead of signal.
 
 ---
 
@@ -280,13 +331,28 @@ history you have** and **what kind of days are in the window**. From backtests:
 | Holiday-heavy month | ~3 - 5% |
 | Thin history (< 2 years) | 5 - 8% |
 
-On the validated May 2026 window (Labour Day month, ~2.4 years of data):
+On the validated May 2026 window (Labour Day month, no CNY, ~2.4 years of data):
 
 | Mode | MAPE |
 |---|---|
 | Default LGBM-L2 | 3.47% |
 | `--full` equal hybrid | 3.30% |
 | `--full --blend selection` | **2.52%** |
+
+**These are single-window numbers on an easy month — a fairer picture is a
+full-year rolling check.** Re-forecasting weekly across all of 2026 so far
+(Jan 1 – May 27, horizons 1–7, the cadence you'd actually run), current
+production including the CNY anchor:
+
+| | MAPE |
+|---|---|
+| All days | **4.26%** |
+| CNY days | **7.29%** (was 14.16% before the anchor) |
+| Non-CNY days | 3.84% |
+
+4.26% reads higher than the headline 2.52% only because it includes CNY,
+which the May window deliberately excludes — not because anything regressed.
+Reproduce this yourself with `evaluate.py` (below).
 
 **Important honest caveats:**
 
@@ -299,10 +365,18 @@ On the validated May 2026 window (Labour Day month, ~2.4 years of data):
    running daily and letting `rawdata.csv` grow will pull typical-window MAPE
    toward 2.5% over the coming year, with no code changes.
 
-3. **The P10-P90 band is currently optimistic** (covers ~55-60% of actuals vs the
-   80% it implies). Treat the band as a *relative* confidence signal (wider =
-   less certain), not a literal 80% guarantee. Honest interval calibration is a
-   known future improvement.
+3. **The P10-P90 band is currently optimistic** (covers ~46-60% of actuals vs the
+   80% it implies, measured both before and after this year's changes). Treat
+   the band as a *relative* confidence signal (wider = less certain), not a
+   literal 80% guarantee. Honest interval calibration (out-of-fold residuals
+   instead of in-sample ones) is a known, unfixed gap — see
+   `docs/MODEL_REVIEW.md` §1.3.
+
+4. **Two changes were tried and rejected this year, for the record:** training
+   each horizon on a wider pool of neighbouring horizons (worse on 6 of 6 test
+   windows), and two attempts at fixing a rare feature-contamination artifact
+   near CNY (both a net wash). Full detail and numbers in
+   `docs/MODEL_REVIEW.md`.
 
 ---
 
@@ -326,6 +400,47 @@ To reproduce the selection + anchor result and per-day breakdown:
 ```powershell
 uv run python research\holiday_anchor.py --holdout 2026-05
 ```
+
+This re-derives and validates the FIXED-holiday anchor specifically (Labour
+Day, Christmas, etc.) — the technique `blend.py` runs in production. It is
+not imported by anything; it exists so that calibration can be independently
+re-checked from scratch, the same way `backtest.py` lets you re-derive the
+base model's numbers.
+
+### 7b. `evaluate.py` — accuracy over ANY date range and lead time
+
+`research\backtest.py` always checks the same thing: the most recent 28 days,
+full horizon. `evaluate.py` is the general tool — pick any date range, pick
+how many days ahead you want to measure, and it retrains at each point in
+history to simulate what your real accuracy would have looked like.
+
+```powershell
+# 1-day-ahead accuracy across May 2026
+uv run python evaluate.py --start 2026-05-01 --end 2026-05-28 --n 0
+
+# 11-day-ahead accuracy over the same range
+uv run python evaluate.py --start 2026-05-01 --end 2026-05-28 --n 10
+
+# Operational view: what did re-forecasting every 7 days actually look like?
+uv run python evaluate.py --start 2026-01-01 --end 2026-05-28 --n 6 --mode rolling_window
+
+# Also produce the MAPE-vs-lead-time curve (accuracy vs how far ahead you forecast)
+uv run python evaluate.py --start 2026-05-01 --end 2026-05-28 --n 0 --by-lead
+```
+
+`--n` controls lead time: `--n 0` = 1-day-ahead, `--n 27` = 28-days-ahead
+(the max). `--mode rolling_window` mirrors a real re-forecasting cadence
+instead of a single fixed lead — this is what produced the "2026 YTD" numbers
+in Section 6.
+
+Every run prints and plots MAPE, WAPE, RMSE, bias, and **P10–P90 coverage**
+(what fraction of actuals actually fell inside the band — compare against the
+80% it's supposed to guarantee, per the caveat above). Results are cached
+under `data\derived\eval_cache\`, so re-plotting the same range is instant;
+pass `--no-cache` to force a fresh run after a code change.
+
+Output chart: `forecasts\eval_<start>_<end>_n<n>.png` by default, or pass
+`--out <path>` for a specific filename.
 
 ---
 
@@ -364,7 +479,9 @@ Key findings from this work (so nobody re-treads dead ends):
 | Holiday under-predicted in forecast | Holiday anchor missing for that year — check `HOLIDAY_ANCHORS` in `v2\_shared.py` covers the forecast year, and that it's a fixed-date holiday |
 | Forecast looks too flat vs recent surge | Default mode reacts slowly; try `--full --blend selection` |
 | Run is slow (>40 min) | Normal for selection mode (2 training rounds); use default for daily |
-| `typhoons.csv not found` | Run `scrape_typhoon.py`, or ignore (feature defaults to 0) |
+| `typhoons.csv not found` | Harmless — the model does not use it. Run `scrape_typhoon.py` to restore the audit trail |
+| Typhoon forecast inside the window | Not modelled. Use `typhoon_override.py` (see Step 2) |
+| Big miss for weeks after a closure | Expected. Demand stays depressed after a typhoon and the model under-forecasts the recovery; no fix currently beats leaving the data alone |
 
 ---
 
@@ -392,8 +509,17 @@ uv run python forecast.py --run-date 2026-06-16 --full --blend selection
 # Refresh typhoon data
 uv run python scrape_typhoon.py
 
-# Validate accuracy
+# Typhoon override (only when a storm is actually forecast into your window)
+uv run python typhoon_override.py --dates 2026-08-12 --show
+uv run python typhoon_override.py --dates 2026-08-12 --closure   # ops suspended
+uv run python typhoon_override.py --dates 2026-08-12 --signal-t8 # ops continuing
+
+# Validate accuracy — quick spot-check (most recent 28 days)
 uv run python research\backtest.py --fast
+
+# Validate accuracy — any date range / lead time / re-forecast cadence
+uv run python evaluate.py --start 2026-01-01 --end 2026-05-28 --n 0
+uv run python evaluate.py --start 2026-01-01 --end 2026-05-28 --n 6 --mode rolling_window --by-lead
 
 # Outputs land in:
 #   forecasts\run_<YYYYMMDD>\predictions.csv  (the forecast)

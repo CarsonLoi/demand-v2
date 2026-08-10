@@ -13,14 +13,35 @@ in this repository is research/archive.
 
 ## What you actually need
 
+**Core — the forecast itself:**
+
 ```
 forecast.py              <-- the production script (run this)
-blend.py                 <-- selection + holiday-anchor blending (used by --blend selection)
-v2/_shared.py            <-- feature engineering (imported by forecast.py)
-scrape_typhoon.py        <-- builds data/raw/typhoons.csv (weather feature)
-data/raw/rawdata.csv     <-- your daily demand history
+v2/_shared.py            <-- feature engineering + the CNY anchor
+blend.py                 <-- selection + fixed-holiday anchoring (--blend selection)
+data/raw/rawdata.csv     <-- your daily demand history  (the only mandatory input)
+data/raw/typhoons.csv    <-- typhoon dates, for audit; NOT a model feature
 pyproject.toml + uv.lock <-- Python environment lockfile
 ```
+
+**Operations — run these around the forecast:**
+
+```
+run_schedule.py          <-- drives a day-by-day scheduling cycle
+typhoon_override.py      <-- manual adjustment when a typhoon/closure is forecast
+scrape_typhoon.py        <-- refreshes data/raw/typhoons.csv from HKO
+```
+
+**Measuring accuracy:**
+
+```
+evaluate.py                    <-- actual-vs-forecast, MAPE by lead time
+research/backtest.py           <-- MAPE on a 28-day holdout ("what is my error?")
+research/holiday_anchor.py     <-- re-derives the selection + anchor numbers
+```
+
+Everything else in `research/` documents rejected approaches — see
+[docs/MODEL_REVIEW.md](docs/MODEL_REVIEW.md) so they are not re-attempted.
 
 ### Three forecast modes
 
@@ -445,19 +466,80 @@ uv run python -c "import json, pathlib; runs=sorted(pathlib.Path('forecasts').gl
 - `USE_RESERVATIONS = False` -- set to `True` if you have a
   `data/raw/reservations.csv` file with on-the-books demand snapshots.
   Format documented in the file.
-- `USE_WEATHER = True` -- exposes the single `is_typhoon_t8plus` feature
-  built from `data/raw/typhoons.csv`. Set False to remove from the model.
-  See "Weather data" section below.
+- `USE_WEATHER = False` -- **keep this off.** Typhoons are handled by an
+  operational override instead; see "Typhoons" below for the measurements
+  behind that decision.
+- `MOVING_ANCHOR_ALPHA = 0.80` / `ANCHOR_HOLIDAYS = {"CNY"}` -- the CNY anchor
+  (see TUTORIAL section 3). Set alpha to 0 to disable it.
 
-## Weather data
+## Typhoons
 
-The model uses a **single binary weather feature** -- `is_typhoon_t8plus`,
-1 when HKO Tropical Cyclone Warning Signal 8 (or 9 / 10) was active on
-that date, 0 otherwise. T8+ is the only weather variable that materially
-moves Macau casino demand (it triggers border crossing restrictions and
-ferry suspensions). Temperature, humidity, wind, precipitation, and lower
-signals (T3) added noise without improving backtested MAPE and were
-removed.
+**Typhoons are not a model feature. They are a manual override.**
+
+Across 2024-01-01..2026-05-28 there are nine T8+ days, and their realised
+impact against a same-weekday baseline ranges from **+10% to -87%**:
+
+| date | typhoon | signal | hours T8+ | impact |
+|---|---|---|---|---|
+| 2024-11-13 | TORAJI | T8 | 0.8 | **+10.1%** |
+| 2024-11-14 | TORAJI | T8 | 10.3 | **+6.1%** |
+| 2024-09-05 | YAGI | T8 | 5.7 | -11.8% |
+| 2024-09-06 | YAGI | T8 | 12.7 | -9.1% |
+| 2025-07-20 | WIPHA | T10 | 19.3 | -22.5% |
+| 2025-09-07 | TAPAH | T8 | 2.7 | -13.3% |
+| 2025-09-08 | TAPAH | T8 | 13.2 | -11.7% |
+| 2025-09-23 | RAGASA | T8 | 9.7 | **-81.3%** |
+| 2025-09-24 | RAGASA | T10 | 20.3 | **-87.5%** |
+
+TORAJI (T8, 10.3 hours under signal) and RAGASA (T8, 9.7 hours) differ by 87
+percentage points. Neither signal level nor duration separates them. What
+separates them is that **RAGASA suspended casino operations and TORAJI did
+not** -- an operational decision, not a weather variable, and nothing in the
+HKO feed predicts it. With two closure days on record, a learned coefficient
+would be fitting a single event.
+
+Leaving `USE_WEATHER = True` also **leaks in backtests**: `add_weather_features`
+joins the typhoon file onto `target_date` with no cutoff, so held-out days carry
+their true signal and the model is told a typhoon will happen. Production is
+unaffected (the file only holds past events), but any backtest spanning a
+typhoon is inflated.
+
+### Applying an override
+
+```powershell
+# inspect the current forecast for the affected day(s)
+uv run python typhoon_override.py --dates 2026-08-12 --show
+
+# operations suspended (the RAGASA case)
+uv run python typhoon_override.py --dates 2026-08-12 --closure
+
+# T8 expected, operations continuing (the YAGI / TAPAH case)
+uv run python typhoon_override.py --dates 2026-08-12 --signal-t8
+```
+
+This writes `predictions_adjusted.csv` beside the run's `predictions.csv`
+(never modifying the original) and records the override in `metadata.json`.
+
+### After a closure
+
+Append the actual demand to `rawdata.csv` as normal. Nothing else to do.
+
+Note for anyone tempted to "clean" closure days out of the feature series: it
+was tried and it does **not** work. The distortion is real -- 879 patron-hours
+in the series throws `rolling_mean_7` off by -24.6% and `rolling_mean_28` by
+-6.1% for 29 days. But substituting a same-weekday estimate made held-out
+error WORSE at every origin tested (+1.05, +0.46, +0.47pp for origins
+2025-09-25, 09-30 and 10-10) and made the under-forecast bias worse, not
+better. The likely reason is that demand stays genuinely depressed for some
+days after a typhoon, and the "contaminated" baseline partly predicts that.
+Leave the actuals alone.
+
+### Historical typhoon data
+
+`data/raw/typhoons.csv` is still maintained (via `scrape_typhoon.py`) because
+it is needed to identify and audit these days -- it is simply no longer fed to
+the model. Temperature, humidity, wind, precipitation and lower signals (T3)
+were tested and added noise without improving backtested MAPE.
 
 ### Source file -- `data/raw/typhoons.csv`
 
@@ -494,31 +576,41 @@ Re-run quarterly (or after each Macau typhoon season) to pick up new events.
 HKO confirms records "during the first working day after the expiry or
 cancellation," so wait a few days after a signal is lowered before re-running.
 
-### Disabling
+### Re-enabling the learned feature (not recommended)
 
-Set `USE_WEATHER = False` in `v2/_shared.py` to remove the feature entirely.
-If `typhoons.csv` is missing, the feature defaults to 0 for every row and
-the model proceeds.
+`USE_WEATHER = True` in `v2/_shared.py` puts the typhoon columns back into the
+model. Before doing that, read the impact table above -- and if you re-enable
+it for any measurement, also set `MASK_FUTURE_TYPHOON = True`, otherwise every
+backtest covering a typhoon is reading the answer. If `typhoons.csv` is
+missing, the features default to 0 for every row and the model proceeds.
 
 ---
 
-### Archive
+### Archive (removed 2026-08)
 
-The following exist for historical reference (benchmark reproducibility,
-documentation of rejected approaches). Production does not use them:
+The archive has been deleted. It was never imported by production, and the
+consolidation was verified by re-running the full forecast afterwards.
 
-- `v2/simple_*.py` -- standalone scripts that train individual base models
-  for benchmarking (LightGBM, XGBoost, CatBoost, NeuralProphet, etc.).
+Removed:
+
+- `v2/simple_*.py` (7 files) -- standalone per-model benchmark scripts.
 - `v2/plot_feature_importance.py` -- diagnostic plot script.
-- `v2/output/` -- pickled models and benchmark charts from the v2 baseline
-  exercise.
-- `v3/` -- the entire folder. Contains an alternative feature set (`_shared.py`
-  with trend features and cross-holiday transfer) that was tested and rejected
-  for overfitting, plus the original `simple_lightgbm_2stage.py` script whose
-  logic has been inlined into `forecast.py` as the `_train_2stage` function.
+- `v3/` (entire folder, 12 files) -- an alternative feature set tested and
+  rejected for overfitting, plus `simple_lightgbm_2stage.py` whose logic is
+  already inlined into `forecast.py` as `_train_2stage`.
 
-You can delete the archive without breaking production. The only cost is
-losing the ability to re-derive the 1.29% MAPE benchmark from scratch.
+All of it is git-tracked, so `git checkout <commit> -- v3 v2/simple_*.py`
+restores it if the per-model benchmarks are ever needed again.
+
+Still present, deliberately:
+
+- `research/` -- the record of WHY the model is built this way, and the only
+  way to re-derive the published numbers. `backtest.py` and
+  `holiday_anchor.py` are actively useful (see "Measuring accuracy" below);
+  the rest document rejected approaches so they are not re-attempted.
+- `hourly/` -- stage 2 of the planning pipeline. Not currently operational
+  (needs `data/raw/hourly_demand.csv`, which does not exist yet), but it is a
+  designed pipeline stage rather than an experiment.
 
 ---
 

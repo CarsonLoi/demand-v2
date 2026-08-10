@@ -60,8 +60,11 @@ FORECASTS.mkdir(exist_ok=True)
 sys.path.insert(0, str(ROOT / "v2"))
 from _shared import (
     HOLDOUT_DAYS,
+    HORIZON_POOL,
+    MOVING_ANCHOR_ALPHA,
     USE_RESERVATIONS,
     USE_WEATHER,
+    apply_moving_anchor,
     build_matrix,
     holiday_mask_from_matrix,
     load_demand,
@@ -72,14 +75,29 @@ from _shared import (
 # =============================================================================
 # Single-model forecaster (LGBM-L2)
 # =============================================================================
-def forecast_lgbm_l2(mat: pd.DataFrame, train_dates_set: set, test_dates: list):
-    """Train LGBM-L2 per horizon on all historical, predict the future test_dates."""
+def forecast_lgbm_l2(mat: pd.DataFrame, train_dates_set: set, test_dates: list,
+                     pool: int | None = None):
+    """Train LGBM-L2 per horizon on all historical, predict the future test_dates.
+
+    `pool` widens each horizon's training set to include neighbouring horizons
+    (h-pool .. h+pool), with `horizon` added as a feature so the model can still
+    tell them apart. Each per-horizon model otherwise sees only ~850 rows
+    against 170+ features, which is a thin ratio and the main source of
+    variance on ordinary days. See HORIZON_POOL in v2/_shared.py.
+    """
+    pool = HORIZON_POOL if pool is None else pool
     feature_cols = [c for c in mat.columns if c not in {"target_date", "horizon", "y"}]
+    if pool and "horizon" not in feature_cols:
+        feature_cols = feature_cols + ["horizon"]
     train_mat = mat[mat["target_date"].isin(train_dates_set)].dropna(subset=["y"])
 
     rows = []
     for h in range(1, HOLDOUT_DAYS + 1):
-        sub = train_mat[train_mat["horizon"] == h]
+        if pool:
+            sub = train_mat[(train_mat["horizon"] >= h - pool) &
+                            (train_mat["horizon"] <= h + pool)]
+        else:
+            sub = train_mat[train_mat["horizon"] == h]
         if len(sub) < 30:
             continue
         X, y = sub[feature_cols], sub["y"]
@@ -399,6 +417,13 @@ def make_forecast(run_date: pd.Timestamp, use_hybrid: bool = False,
         print("  Training LightGBM-L2 (~3 min)...")
         preds = forecast_lgbm_l2(mat, train_dates_set, test_dates)
 
+    # CNY anchor — applies in every mode. Only CNY-window days are touched;
+    # everything else is returned unchanged. See v2/_shared.py for the
+    # measurements (CNY 2026: 11.9% -> 6.9% short lead, 16.1% -> 7.4% long).
+    # Uses `demand` (actuals only, no padded future rows) so the profile's
+    # level term reads real history.
+    preds = apply_moving_anchor(preds, demand, run_date)
+
     return preds, demand
 
 
@@ -438,6 +463,7 @@ def save_outputs(preds: pd.DataFrame, run_date: pd.Timestamp, demand: pd.DataFra
         "p50_sum": float(preds.p50.sum()),
         "use_reservations": bool(USE_RESERVATIONS),
         "use_weather": bool(USE_WEATHER),
+        "cny_anchor_alpha": float(MOVING_ANCHOR_ALPHA),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
     }
     (run_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
