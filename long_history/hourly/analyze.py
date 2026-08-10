@@ -167,7 +167,11 @@ def plot_comparison(result: dict, date_to_hours: dict, holiday_dates: set,
 
 def main() -> int:
     print("=== Hourly pattern analyzer (long_history) ===\n")
-    df = P.load_hourly()
+    try:
+        df = P.load_hourly()
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
+        return 1
     print(f"  Loaded {len(df):,} hourly rows  "
           f"({df.date.min().date()} .. {df.date.max().date()})")
 

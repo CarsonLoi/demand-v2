@@ -44,6 +44,12 @@ def load_hourly(path: Path | None = None) -> pd.DataFrame:
     callers omit it and get DATA_HOURLY.
     """
     p = Path(path) if path is not None else DATA_HOURLY
+    if not p.exists():
+        raise FileNotFoundError(
+            f"{p} not found. Put real hourly history there (see "
+            "long_history/hourly/TUTORIAL.md section 0), or pass a "
+            "different path (e.g. sample_hourly_data.csv) for a quick "
+            "mechanism check.")
     df = pd.read_csv(p, parse_dates=["date"])
     df["hour"] = df["hour"].astype(int)
     df["demand"] = df["demand"].astype(float)

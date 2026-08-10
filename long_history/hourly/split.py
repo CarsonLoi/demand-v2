@@ -113,7 +113,11 @@ def main() -> int:
         profile_lookup[(hol, int(off))] = g.sort_values("hour")["share"].to_numpy()
     print(f"  loaded {len(profile_lookup)} holiday-profile cell(s)")
 
-    df_hourly = P.load_hourly()
+    try:
+        df_hourly = P.load_hourly()
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
+        return 1
     date_to_hours = P.date_to_hourly_array(df_hourly)
     holiday_dates = P.get_holiday_window_dates()
     local_baselines = P.compute_local_dow_baselines(

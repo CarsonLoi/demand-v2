@@ -112,7 +112,11 @@ def main() -> int:
     print("HOURLY SPLIT VALIDATION")
     print("=" * 78)
 
-    df = P.load_hourly()
+    try:
+        df = P.load_hourly()
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
+        return 1
     date_to_hours = P.date_to_hourly_array(df)
     holiday_dates = P.get_holiday_window_dates()
     full_dates = sorted(d for d, h in date_to_hours.items() if not np.isnan(h).any())
