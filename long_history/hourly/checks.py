@@ -19,6 +19,7 @@ ROOT = HERE.parents[0]
 sys.path.insert(0, str(ROOT))
 
 import patterns as P  # noqa: E402
+import split as SPLIT  # noqa: E402
 
 
 def check_share_vector() -> tuple[bool, str]:
@@ -61,9 +62,43 @@ def check_local_dow_baseline_no_leakage() -> tuple[bool, str]:
                else "no poisoned (on/after reference_date) day reached the baseline")
 
 
+def check_split_conservation() -> tuple[bool, str]:
+    """The 24 hourly p50s produced for a day must sum back to that day's
+    daily p50 -- a split that doesn't conserve the total is silently wrong."""
+    share_vec = np.array([1 / 24] * 24)  # a flat day, trivial to check by hand
+    decisions_lookup, profile_lookup = {}, {}
+    local_baselines = {"weekday": share_vec, "friday": share_vec,
+                       "saturday": share_vec, "sunday": share_vec}
+    rows, strategy = SPLIT.split_day(pd.Timestamp("2024-01-03"), 100.0, 200.0, 300.0,
+                                     decisions_lookup, profile_lookup, local_baselines)
+    total_p50 = sum(r["p50"] for r in rows)
+    ok = abs(total_p50 - 200.0) < 0.01
+    return ok, f"24-hour p50 sum = {total_p50:.2f} (want 200.00), strategy={strategy}"
+
+
+def check_split_no_future_leakage() -> tuple[bool, str]:
+    """split.py must build its local DOW baseline using run_date+1 as the
+    reference -- i.e. it may see run_date, but nothing after it."""
+    dates = pd.date_range("2024-01-01", "2024-06-01", freq="D")
+    date_to_hours = {}
+    for d in dates:
+        arr = np.full(24, 1.0)
+        if d > pd.Timestamp("2024-05-01"):   # strictly AFTER the run date
+            arr[0] = 999.0
+        date_to_hours[d] = arr
+    run_date = pd.Timestamp("2024-05-01")
+    baselines = P.compute_local_dow_baselines(run_date + pd.Timedelta(days=1),
+                                              date_to_hours, holiday_dates=set())
+    bad = [b for b, v in baselines.items() if v is not None and v[0] > 10]
+    ok = not bad
+    return ok, (f"future-dated buckets leaked into the split baseline: {bad}" if bad
+               else "no day after run_date reached the split's baseline")
+
+
 def run_all() -> int:
     checks = [check_share_vector, check_share_vector_zero_total,
-              check_tvd_bounds, check_local_dow_baseline_no_leakage]
+              check_tvd_bounds, check_local_dow_baseline_no_leakage,
+              check_split_conservation, check_split_no_future_leakage]
     failed = 0
     for fn in checks:
         ok, msg = fn()
