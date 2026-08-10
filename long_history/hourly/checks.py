@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 import patterns as P  # noqa: E402
 import split as SPLIT  # noqa: E402
+import comparison_model as CM  # noqa: E402
 
 
 def check_share_vector() -> tuple[bool, str]:
@@ -95,10 +96,28 @@ def check_split_no_future_leakage() -> tuple[bool, str]:
                else "no day after run_date reached the split's baseline")
 
 
+def check_comparison_model_shares_sum_to_one() -> tuple[bool, str]:
+    """predict_day_shares must always return a normalized 24-vector."""
+    rng = np.random.default_rng(0)
+    dates = pd.date_range("2024-01-01", periods=40, freq="D")
+    df = pd.DataFrame([
+        {"date": d, "hour": h, "demand": max(1.0, 100 + 20 * np.sin(h / 3) + rng.normal(0, 5))}
+        for d in dates for h in range(24)
+    ])
+    feat = CM.build_hourly_feature_matrix(df, holiday_dates=set())
+    train_mask = feat["date"] < dates[30]
+    model = CM.train_comparison_model(feat, train_mask)
+    test_date = dates[35]
+    shares = CM.predict_day_shares(model, feat, test_date)
+    ok = not np.isnan(shares).any() and abs(shares.sum() - 1.0) < 1e-6
+    return ok, f"predicted shares for {test_date.date()} sum to {shares.sum():.6f}"
+
+
 def run_all() -> int:
     checks = [check_share_vector, check_share_vector_zero_total,
               check_tvd_bounds, check_local_dow_baseline_no_leakage,
-              check_split_conservation, check_split_no_future_leakage]
+              check_split_conservation, check_split_no_future_leakage,
+              check_comparison_model_shares_sum_to_one]
     failed = 0
     for fn in checks:
         ok, msg = fn()
