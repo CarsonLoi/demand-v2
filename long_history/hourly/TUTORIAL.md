@@ -75,18 +75,32 @@ uv run python long_history/hourly/validate.py --holdout-days 90
 Runs an honest, walk-forward backtest: for each day in the holdout window,
 using only data strictly before it, computes what the empirical method
 would have predicted and what a lightweight comparison model would have
-predicted, applies both to that day's *actual* total, and reports MAPE by
-day-type (ordinary weekday, Friday/Saturday/Sunday, holiday-inherited-DOW,
-holiday-specific-profile).
+predicted, and applies both to that day's *actual* total. Covers **both**
+holiday and ordinary days, reported in two tiers:
+
+- **Tier 1 — by bucket** (operational): `weekday` (Mon–Thu, pooled — this
+  is the actual prediction the split uses), `friday`, `saturday`, `sunday`,
+  `holiday_inherited_dow`, `holiday_specific_profile`.
+- **Tier 2 — by individual weekday** (diagnostic, non-holiday days only):
+  Monday through Sunday reported separately, even though Monday–Thursday
+  share one predicted baseline. This checks whether pooling those four
+  days is actually justified — if Monday's error is consistently worse
+  than Wednesday's despite using the same prediction, that's evidence the
+  `weekday` bucket in `patterns.DOW_BUCKETS` should be split further. The
+  script prints the Mon–Thu spread and flags it directly if it looks too
+  wide.
 
 Produces, under `long_history/output/hourly/`:
-- `validation_report.csv` — one row per (date, method)
-- `validation_summary.csv` — MAPE by (day-type, method)
+- `validation_report.csv` — one row per (date, method), with both the
+  bucket (`day_type`) and the individual `weekday` recorded
+- `validation_summary.csv` — Tier 1: MAPE by (bucket, method)
+- `validation_summary_by_weekday.csv` — Tier 2: MAPE by (weekday, method)
 
-**Read the day-type breakdown, not just the average.** The empirical
-method is only "good enough, no complicated model needed" if it holds up
-across *every* segment — a good pooled average hiding one bad segment is
-not a pass.
+**Read every segment, not just the average — for both tiers.** The
+empirical method is only "good enough, no complicated model needed" if it
+holds up across *every* bucket, and the weekday pooling is only
+justified if Tier 2 doesn't show one weekday quietly worse than the rest.
+A good pooled average hiding one bad segment is not a pass.
 
 ## 4. Running the sanity checks
 

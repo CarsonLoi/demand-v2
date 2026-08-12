@@ -78,7 +78,11 @@ def chart_mape_by_daytype(report_path: Path, out_path: Path) -> None:
         return
 
     n_days = df["date"].nunique()
-    order = ["ordinary_weekday", "friday_saturday_sunday",
+    # Matches validate.py's bucket-level day_type labels exactly (Tier 1:
+    # weekday = Mon-Thu pooled, friday/saturday/sunday each separate --
+    # see validate.py's module docstring for why they're no longer pooled
+    # together in reporting the way they used to be).
+    order = ["weekday", "friday", "saturday", "sunday",
              "holiday_inherited_dow", "holiday_specific_profile"]
     present = [d for d in order if d in df.day_type.unique()]
     methods = [("empirical", "Historical distribution", TEAL),

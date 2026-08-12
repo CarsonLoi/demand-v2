@@ -1,6 +1,7 @@
 """validate.py -- honest, leakage-free validation of the hourly-splitting
 approach: does the empirical distribution method actually beat, or at least
-match, a lightweight comparison model?
+match, a lightweight comparison model? Covers BOTH holiday days and
+ordinary (non-holiday) days -- see the two-tier reporting below.
 
 METHOD
 ------
@@ -17,6 +18,24 @@ recomputed walk-forward, using only data strictly before that day:
 Both methods' predicted share-vectors are applied to that day's ACTUAL daily
 total (not a forecast total) -- this isolates hourly-split error from
 daily-forecast error, which is a separately measured concern.
+
+TWO-TIER REPORTING FOR NON-HOLIDAY DAYS
+----------------------------------------
+patterns.DOW_BUCKETS pools Monday-Thursday into one "weekday" baseline --
+the split mechanism ITSELF treats those four days as interchangeable. That
+is an assumption, not a fact, and it had never been checked. So this script
+reports two views:
+    1. BY BUCKET (validation_summary.csv) -- matches what the split
+       mechanism actually uses: weekday / friday / saturday / sunday /
+       holiday_inherited_dow / holiday_specific_profile. This is the
+       operational number.
+    2. BY INDIVIDUAL WEEKDAY (validation_summary_by_weekday.csv) --
+       Monday..Sunday reported separately, even though Monday-Thursday
+       share one predicted baseline. This is the diagnostic: if Monday's
+       error is consistently worse than Wednesday's despite using the same
+       prediction, that is evidence the "weekday" bucket is pooling days
+       that do not actually share a shape, and DOW_BUCKETS should be split
+       further. If the four days look similar, the pooling is justified.
 
 STATUS
 ------
@@ -50,9 +69,25 @@ import comparison_model as CM  # noqa: E402
 from analyze import analyze_one_cell  # noqa: E402
 
 
+WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                 "Friday", "Saturday", "Sunday"]
+
+
+def bucket_for_dow(dow: int) -> str:
+    """Which patterns.DOW_BUCKETS key a (non-holiday) day of week uses.
+    Monday-Thursday share one bucket; Friday/Saturday/Sunday each get
+    their own -- this must match patterns.DOW_BUCKETS exactly, since it
+    is describing that same grouping, not an independent choice."""
+    return "weekday" if dow < 4 else ["friday", "saturday", "sunday"][dow - 4]
+
+
 def classify_day_type(is_holiday: bool, decision: str | None, dow: int) -> str:
+    """The BUCKET-level label -- matches what the split mechanism itself
+    uses to choose a prediction. See bucket_for_dow for the non-holiday
+    case; WEEKDAY_NAMES[dow] in main() carries the finer diagnostic label
+    separately, since pooling Mon-Thu here is what's being checked."""
     if not is_holiday:
-        return "ordinary_weekday" if dow < 4 else "friday_saturday_sunday"
+        return bucket_for_dow(dow)
     if decision == "USE_HOLIDAY_PROFILE":
         return "holiday_specific_profile"
     return "holiday_inherited_dow"
@@ -66,8 +101,7 @@ def empirical_prediction(date: pd.Timestamp, date_to_hours: dict,
     hol_name, hol_offset = P.find_holiday_membership(date)
 
     if hol_name is None:
-        bucket = "weekday" if date.weekday() < 4 else \
-                 ["friday", "saturday", "sunday"][date.weekday() - 4]
+        bucket = bucket_for_dow(date.weekday())
         return local.get(bucket), classify_day_type(False, None, date.weekday())
 
     result = analyze_one_cell(hol_name, hol_offset, date_to_hours, holiday_dates,
@@ -75,8 +109,7 @@ def empirical_prediction(date: pd.Timestamp, date_to_hours: dict,
     if result is None:
         # not enough PRIOR occurrences yet to decide -- fall through to DOW,
         # same fallback split.py uses
-        bucket = "weekday" if date.weekday() < 4 else \
-                 ["friday", "saturday", "sunday"][date.weekday() - 4]
+        bucket = bucket_for_dow(date.weekday())
         return local.get(bucket), classify_day_type(False, None, date.weekday())
 
     day_type = classify_day_type(True, result["decision"], date.weekday())
@@ -152,14 +185,17 @@ def main() -> int:
         emp_shares, day_type = empirical_prediction(date, date_to_hours, holiday_dates)
         cmp_shares = (CM.predict_day_shares(model, feat, date)
                      if model is not None else np.full(24, np.nan))
+        weekday_name = WEEKDAY_NAMES[date.weekday()]
 
         for method, shares in (("empirical", emp_shares), ("comparison_model", cmp_shares)):
             if shares is None or np.isnan(shares).any():
                 rows.append({"date": date, "method": method, "day_type": day_type,
+                            "weekday": weekday_name, "is_holiday": date in holiday_dates,
                             "mape": np.nan, "tvd": np.nan, "n_hours": 0})
                 continue
             mape, tvd_ = mape_tvd(shares, actual)
             rows.append({"date": date, "method": method, "day_type": day_type,
+                        "weekday": weekday_name, "is_holiday": date in holiday_dates,
                         "mape": mape, "tvd": tvd_, "n_hours": 24})
 
     report = pd.DataFrame(rows)
@@ -167,16 +203,29 @@ def main() -> int:
     report_path = P.DERIVED / "validation_report.csv"
     report.to_csv(report_path, index=False)
 
-    summary = (report.dropna(subset=["mape"])
-              .groupby(["day_type", "method"])["mape"]
+    scored = report.dropna(subset=["mape"])
+
+    # Tier 1: by bucket -- the operational number, matches what the split
+    # mechanism actually predicts with.
+    summary = (scored.groupby(["day_type", "method"])["mape"]
               .agg(["mean", "count"]).reset_index()
               .rename(columns={"mean": "mape_pct", "count": "n_days"}))
     summary_path = P.DERIVED / "validation_summary.csv"
     summary.to_csv(summary_path, index=False)
 
+    # Tier 2: by individual weekday, NON-HOLIDAY days only -- the diagnostic.
+    # Holidays are excluded here: they are indexed by (holiday, day_offset),
+    # not by weekday, so pooling them by weekday would compare unlike things.
+    weekday_scored = scored[~scored["is_holiday"]]
+    summary_wd = (weekday_scored.groupby(["weekday", "method"])["mape"]
+                 .agg(["mean", "count"]).reset_index()
+                 .rename(columns={"mean": "mape_pct", "count": "n_days"}))
+    summary_wd_path = P.DERIVED / "validation_summary_by_weekday.csv"
+    summary_wd.to_csv(summary_wd_path, index=False)
+
     print("\n" + "=" * 78)
-    print("RESULTS BY DAY TYPE  (MECHANISM CHECK ONLY IF RUN AGAINST THE SAMPLE "
-          "FILE -- see module docstring)")
+    print("TIER 1 -- BY BUCKET (operational: matches what the split predicts with)")
+    print("MECHANISM CHECK ONLY IF RUN AGAINST THE SAMPLE FILE -- see module docstring")
     print("=" * 78)
     if summary.empty:
         print("  No scoreable days -- every prediction was missing data. "
@@ -189,8 +238,28 @@ def main() -> int:
                 print(f"    {r['method']:18s} MAPE {r['mape_pct']:6.2f}%  "
                       f"(n={int(r['n_days'])} day-method rows)")
 
+    print("\n" + "=" * 78)
+    print("TIER 2 -- BY INDIVIDUAL WEEKDAY, non-holiday days only (diagnostic:")
+    print("is pooling Monday..Thursday into one 'weekday' bucket actually justified?)")
+    print("=" * 78)
+    if summary_wd.empty:
+        print("  No scoreable non-holiday days.")
+    else:
+        for wd in [w for w in WEEKDAY_NAMES if w in summary_wd.weekday.unique()]:
+            sub = summary_wd[summary_wd.weekday == wd]
+            print(f"\n  {wd}:")
+            for _, r in sub.iterrows():
+                print(f"    {r['method']:18s} MAPE {r['mape_pct']:6.2f}%  "
+                      f"(n={int(r['n_days'])} day-method rows)")
+        weekday_only = summary_wd[summary_wd.weekday.isin(WEEKDAY_NAMES[:4])]
+        if len(weekday_only) and weekday_only.groupby("weekday").ngroups > 1:
+            spread = weekday_only.groupby("weekday")["mape_pct"].mean()
+            print(f"\n  Mon-Thu MAPE spread: {spread.min():.1f}% .. {spread.max():.1f}%  "
+                  f"({'similar enough -- pooling looks fine' if spread.max()-spread.min() < 3 else 'CONSIDER SPLITTING the weekday bucket further'})")
+
     print(f"\n-> {report_path}")
     print(f"-> {summary_path}")
+    print(f"-> {summary_wd_path}")
     return 0
 
 
