@@ -1,0 +1,23 @@
+{
+  "run_date": "2025-12-04",
+  "model": "hybrid_6model_selection_anchor",
+  "initial_forecast": false,
+  "initial_forecast_range": null,
+  "horizon_days": 28,
+  "historical_data_range": [
+    "2024-01-01",
+    "2026-05-28"
+  ],
+  "forecast_range": [
+    "2025-12-05",
+    "2026-01-01"
+  ],
+  "p50_min": 6367.634276249372,
+  "p50_max": 7712.717523623065,
+  "p50_mean": 6935.782483676115,
+  "p50_sum": 194201.90954293121,
+  "use_reservations": false,
+  "use_weather": false,
+  "cny_anchor_alpha": 0.8,
+  "generated_at": "2026-08-08T16:58:02"
+}

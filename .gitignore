@@ -12,9 +12,12 @@ venv/
 v2/output/*
 v3/output/*
 !v?/output/.gitkeep
+long_history/output/*
+!long_history/output/.gitkeep
 
 # Data (sensitive — depends on real data)
 data/raw/rawdata.csv
+long_history/data/raw/rawdata_long.csv
 
 # Logs / temp
 *.log
