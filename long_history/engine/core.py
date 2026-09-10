@@ -569,14 +569,57 @@ def check_holiday_coverage(demand: pd.DataFrame, holdout_days: int = HOLDOUT_DAY
 MOVING_HOLIDAYS = {"CNY", "MidAutumn", "DragonBoat", "Easter"}
 
 
-def _holiday_alignment_map(which: set | None = None):
-    """date -> (holiday_name, offset_from_anchor, previous_anchor_of_same_holiday).
+ALIGN_MAX_BACK = 3      # how many occurrences the comparable-match walk may reach
+
+
+def _holiday_alignment_map(which: set | None = None, comparable: bool = False):
+    """date -> (holiday_name, offset_from_anchor, matched_anchor_of_same_holiday).
 
     Defaults to MOVING_HOLIDAYS — see the note above for why fixed-date
     holidays are deliberately left to the weekday-preserving legacy lag.
     Pass `which` to narrow it further (the CNY anchor below does).
+
+    comparable=True walks back to the most recent occurrence whose OVERLAP
+    STATUS matches — the same set of OTHER holidays covering that same offset
+    day — instead of always taking the immediate predecessor.
+
+    Why: Mid-Autumn 2025 (Oct 5-7) fell entirely inside Golden Week (Oct 1-7)
+    and ran at 1.04x its own pre-holiday baseline. Standalone Mid-Autumns run
+    at 0.841x (2016 0.834, 2018 0.890, 2019 0.811, 2023 0.923, 2024 0.749).
+    Mid-Autumn 2026 (Sep 24-26) is standalone, so matching it to 2025 hands
+    the model a reference ~23% above the standalone norm for exactly the days
+    it must forecast. With this on, 2026 matches 2024 instead.
+
+    Touches 12 (occurrence, offset) cells across the 2016-2030 anchors, all
+    Mid-Autumn and Easter — no CNY cell changes.
+
+    MEASURED, and the evidence is thin and points the other way: on the only
+    event with actuals on both sides (Mid-Autumn 2018, 3 cells) the re-pointed
+    reference predicted the realised lift WORSE — mean |error| 0.111 -> 0.147
+    (+32%), winning 2 of 3 cells but losing heavily on d-1. n=1 event, so it
+    is not conclusive either way; adopted on the user's decision. Re-check
+    once Mid-Autumn 2026 actuals land:
+        uv run python research/holiday_alignment_overlap.py --reference-check
+
+    Deliberately does NOT skip excluded/COVID occurrences — features._guard_yearly
+    already NaNs a matched source that lands in an excluded period. Folding
+    that in here would additionally re-point every 2021/2022 holiday away from
+    COVID, a separate change (66 cells instead of 12).
     """
     which = MOVING_HOLIDAYS if which is None else which
+
+    member: dict = {}
+    if comparable:
+        for n, ancs in HOLIDAY_ANCHORS.items():
+            w0, w1 = HOLIDAY_WINDOWS[n]
+            for a in ancs:
+                for x in pd.date_range(a + pd.Timedelta(days=w0),
+                                       a + pd.Timedelta(days=w1)):
+                    member.setdefault(pd.Timestamp(x), set()).add(n)
+
+    def _overlap(d, self_name):
+        return frozenset(member.get(pd.Timestamp(d), set()) - {self_name})
+
     out = {}
     for name, anchors in HOLIDAY_ANCHORS.items():
         if name not in which:
@@ -589,7 +632,14 @@ def _holiday_alignment_map(which: set | None = None):
             prev = srt[j - 1]
             for off in range(ws, we + 1):
                 d = a + pd.Timedelta(days=off)
-                out.setdefault(d, (name, off, prev))
+                match = prev
+                if comparable:
+                    want = _overlap(d, name)
+                    for k in range(j - 1, max(-1, j - 1 - ALIGN_MAX_BACK), -1):
+                        if _overlap(srt[k] + pd.Timedelta(days=off), name) == want:
+                            match = srt[k]
+                            break
+                out.setdefault(d, (name, off, match))
     return out
 
 
@@ -609,7 +659,10 @@ def add_holiday_aligned_yoy(df, date_to_demand, date_col: str = "target_date"):
       holiday_yoy_lift — that demand ÷ the surrounding non-holiday baseline
                          last year (how much the holiday lifted demand)
     """
-    align = _holiday_alignment_map()
+    # comparable=True ONLY here. apply_moving_anchor below deliberately keeps
+    # the immediate-predecessor match: it is the CNY correction, a separate
+    # measured mechanism, and no CNY cell changes under this rule anyway.
+    align = _holiday_alignment_map(comparable=True)
     target = pd.to_datetime(df[date_col])
 
     base_cache = {}

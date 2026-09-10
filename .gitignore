@@ -23,3 +23,6 @@ long_history/data/raw/rawdata_long.csv
 *.log
 .DS_Store
 Thumbs.db
+
+# Backups of the sensitive raw data (same content, different suffix)
+*.bak

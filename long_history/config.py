@@ -46,6 +46,19 @@ REGIMES = [
 #   2024-01  19.4   normal resumed
 EXCLUDE_FROM_TRAINING = [
     ("2020-01-23", "2022-12-31"),   # COVID
+    # Typhoon RAGASA: operations suspended ~33h. These are SUPPLY-zero days,
+    # not demand observations -- but floortables stayed >0 (a partial-day
+    # suspension), so EXCLUDE_CLOSURES below does NOT catch them and they
+    # would otherwise be learned as real demand.
+    #     2025-09-22   6,292   pre-storm shoulder
+    #     2025-09-23   1,295   -82% vs surrounding week
+    #     2025-09-24     879   -88%
+    #     2025-09-25   6,184   recovery shoulder
+    # Listing them here also triggers GUARD_LAGS_CROSSING_EXCLUDED, which NaNs
+    # lag_365 / lag_anchor_365 / lag_728 / yoy_ratio for any 2026 target whose
+    # yearly lookback lands on them -- without it the Sep-2026 forecast reads
+    # 879 as "same day last year" and collapses Sep 23-24 for no reason.
+    ("2025-09-23", "2025-09-25"),   # RAGASA suspension + recovery
 ]
 
 # Exclusion variants to COMPARE. Each entry is (label, extra ranges on top of
