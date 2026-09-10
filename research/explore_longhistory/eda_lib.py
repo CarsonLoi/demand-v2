@@ -262,3 +262,33 @@ def cny_trough_by_year(df: pd.DataFrame) -> pd.DataFrame:
         if s.notna().any():
             rows[int(yr)] = {"min_mult_offset": int(s.idxmin()), "min_mult_value": float(s.min())}
     return pd.DataFrame(rows).T
+
+
+# ── Part A4 — COVID section (kept out of the year-over-year views) ────────
+def covid_timeline(df: pd.DataFrame) -> pd.DataFrame:
+    d = df[(df["date"] >= "2019-01-01") & (df["date"] <= "2024-12-31")].copy()
+    d["period"] = d["date"].dt.to_period("M")
+    g = d.groupby("period")
+    out = pd.DataFrame({
+        "mean_demand": g["demand"].mean(),
+        "mean_per_table": g["demand_per_table"].mean(),
+        "n_days": g.size(),
+        "n_closure_days": g.apply(
+            lambda x: int(((x["floortables"] == 0) | (x["demand"] == 0)).sum())),
+    })
+    out.index = out.index.astype(str)
+    return out
+
+
+def recovery_2023_check(df: pd.DataFrame) -> dict:
+    d = df[df["date"].dt.year == 2023]
+    jan = d.loc[d["date"].dt.month == 1, "demand_per_table"].mean()
+    dec = d.loc[d["date"].dt.month == 12, "demand_per_table"].mean()
+    h1_2024 = df.loc[(df["date"].dt.year == 2024) & (df["date"].dt.month <= 6),
+                     "demand_per_table"].mean()
+    return {
+        "jan_per_table": float(jan), "dec_per_table": float(dec),
+        "climbed": bool(dec > jan),
+        "norm_2024_h1": float(h1_2024),
+        "reached_norm": bool(dec >= 0.95 * h1_2024),
+    }

@@ -191,6 +191,18 @@ def check_cny_trough_below_one() -> tuple[bool, str]:
         f"pre-CNY min multipliers: {vals.round(2).to_dict()}"
 
 
+def check_covid_timeline_spans_2019_2024() -> tuple[bool, str]:
+    t = L.covid_timeline(L.load_frames())
+    lo, hi = str(t.index.min()), str(t.index.max())
+    return lo == "2019-01" and hi == "2024-12", f"covid timeline span {lo}..{hi}"
+
+
+def check_recovery_2023_climbed() -> tuple[bool, str]:
+    r = L.recovery_2023_check(L.load_frames())
+    return r["climbed"] and r["jan_per_table"] < r["dec_per_table"], \
+        f"2023 per-table jan={r['jan_per_table']:.1f} dec={r['dec_per_table']:.1f} climbed={r['climbed']}"
+
+
 CHECKS = [
     check_alignment_cv_zero_when_equal,
     check_alignment_cv_known_spread,
@@ -210,6 +222,8 @@ CHECKS = [
     check_holiday_multiplier_no_covid,
     check_holiday_alignment_verdict_columns,
     check_cny_trough_below_one,
+    check_covid_timeline_spans_2019_2024,
+    check_recovery_2023_climbed,
 ]
 
 

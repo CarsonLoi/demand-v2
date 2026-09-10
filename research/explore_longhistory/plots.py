@@ -138,3 +138,19 @@ def plot_cny_trough(trough_table: pd.DataFrame, out: Path) -> None:
                  color=NAVY, fontsize=12, fontweight="bold", loc="left")
     style_ax(ax)
     _save(fig, out)
+
+
+# ── Part A4 ─────────────────────────────────────────────────────────────
+def plot_covid_timeline(timeline: pd.DataFrame, out: Path) -> None:
+    fig, ax = plt.subplots(figsize=(13, 4.8))
+    x = range(len(timeline))
+    ax.plot(x, timeline["mean_per_table"], "o-", color=NAVY, lw=1.7, ms=3)
+    idx = list(timeline.index)
+    ax.axvspan(idx.index("2020-01"), idx.index("2022-12"), color=RED, alpha=0.10)
+    ax.set_xticks(list(x)[::3])
+    ax.set_xticklabels(idx[::3], rotation=45, fontsize=8)
+    ax.set_ylabel("mean demand / table", color=GREY, fontsize=9)
+    ax.set_title("COVID collapse and recovery - monthly demand per table, 2019-2024",
+                 color=NAVY, fontsize=12, fontweight="bold", loc="left")
+    style_ax(ax)
+    _save(fig, out)
