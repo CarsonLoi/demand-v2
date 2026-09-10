@@ -292,3 +292,66 @@ def recovery_2023_check(df: pd.DataFrame) -> dict:
         "norm_2024_h1": float(h1_2024),
         "reached_norm": bool(dec >= 0.95 * h1_2024),
     }
+
+
+# ── Part B1 — feature-matrix sample + data dictionary ────────────────────
+_MATRIX_CACHE: pd.DataFrame | None = None
+
+
+def build_matrix() -> pd.DataFrame:
+    global _MATRIX_CACHE
+    if _MATRIX_CACHE is None:
+        demand = F.load_long_demand()
+        base = F.build_base(demand, history_start=None, quiet=True)
+        _MATRIX_CACHE = F.apply_exclusions(base, demand, [])
+    return _MATRIX_CACHE
+
+
+def feature_names(mat: pd.DataFrame) -> list[str]:
+    return F.feature_columns(mat)
+
+
+def sample_tall(mat: pd.DataFrame, n: int = 500, seed: int = 0) -> pd.DataFrame:
+    d = mat.sort_values(["target_date", "horizon"]).reset_index(drop=True)
+    idx = np.linspace(0, len(d) - 1, num=min(n, len(d))).round().astype(int)
+    return d.iloc[np.unique(idx)].reset_index(drop=True)
+
+
+def pick_sample_dates() -> dict[str, pd.Timestamp]:
+    return {
+        "normal_midweek":  pd.Timestamp("2025-11-19"),
+        "normal_saturday": pd.Timestamp("2025-11-22"),
+        "cny_dm3":         pd.Timestamp("2026-02-14"),
+        "cny_dp1":         pd.Timestamp("2026-02-18"),
+        "goldenweek":      pd.Timestamp("2025-10-02"),
+        "jan2026_a":       pd.Timestamp("2026-01-26"),
+        "jan2026_b":       pd.Timestamp("2026-01-29"),
+    }
+
+
+def sample_wide(mat: pd.DataFrame, horizon: int = 7) -> pd.DataFrame:
+    feats = feature_names(mat)
+    cols = {}
+    for label, d in pick_sample_dates().items():
+        row = mat[(mat["target_date"] == d) & (mat["horizon"] == horizon)]
+        cols[label] = (row[feats].iloc[0] if len(row)
+                       else pd.Series(np.nan, index=feats))
+    out = pd.DataFrame(cols)
+    out["__group__"] = [feature_group(f) for f in out.index]
+    return out
+
+
+def feature_dictionary(mat: pd.DataFrame) -> pd.DataFrame:
+    feats = feature_names(mat)
+    trainable = mat[mat["y"].notna()]
+    rows = []
+    for f in feats:
+        col = mat[f]
+        rows.append({
+            "feature": f, "group": feature_group(f), "dtype": str(col.dtype),
+            "pct_nonnull_all": 100 * col.notna().mean(),
+            "pct_nonnull_trainable": 100 * trainable[f].notna().mean(),
+            "min": col.min(skipna=True), "mean": col.mean(skipna=True),
+            "max": col.max(skipna=True),
+        })
+    return pd.DataFrame(rows).set_index("feature")

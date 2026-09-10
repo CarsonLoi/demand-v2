@@ -203,6 +203,36 @@ def check_recovery_2023_climbed() -> tuple[bool, str]:
         f"2023 per-table jan={r['jan_per_table']:.1f} dec={r['dec_per_table']:.1f} climbed={r['climbed']}"
 
 
+def check_matrix_feature_count() -> tuple[bool, str]:
+    mat = L.build_matrix()
+    n = len(L.feature_names(mat))
+    return n == 174, f"matrix has {n} features (want 174)"
+
+
+def check_sample_wide_has_jan2026_and_all_features() -> tuple[bool, str]:
+    mat = L.build_matrix()
+    w = L.sample_wide(mat)
+    cols_ok = {"jan2026_a", "jan2026_b", "cny_dp1"}.issubset(w.columns)
+    rows_ok = len(w) == len(L.feature_names(mat))
+    return cols_ok and rows_ok, f"wide sample: {w.shape}, cols {list(w.columns)}"
+
+
+def check_feature_dictionary_groups_and_nonnull() -> tuple[bool, str]:
+    mat = L.build_matrix()
+    fd = L.feature_dictionary(mat)
+    groups = set(fd["group"])
+    known = {"recency_aggregate", "short_lag", "yearly_lookback", "holiday_yoy",
+             "holiday_flag", "calendar", "mainland_block", "regime", "capacity", "other"}
+    ok = groups.issubset(known) and fd["pct_nonnull_all"].between(0, 100).all()
+    return ok, f"{len(fd)} features, groups {sorted(groups)}"
+
+
+def check_sample_tall_shape() -> tuple[bool, str]:
+    mat = L.build_matrix()
+    t = L.sample_tall(mat, n=500)
+    return len(t) == 500 and "target_date" in t.columns, f"tall sample {t.shape}"
+
+
 CHECKS = [
     check_alignment_cv_zero_when_equal,
     check_alignment_cv_known_spread,
@@ -224,6 +254,10 @@ CHECKS = [
     check_cny_trough_below_one,
     check_covid_timeline_spans_2019_2024,
     check_recovery_2023_climbed,
+    check_matrix_feature_count,
+    check_sample_wide_has_jan2026_and_all_features,
+    check_feature_dictionary_groups_and_nonnull,
+    check_sample_tall_shape,
 ]
 
 
