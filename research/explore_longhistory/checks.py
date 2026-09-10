@@ -16,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import eda_lib as L          # noqa: E402
+import lightgbm as lgb       # noqa: E402, F401
 
 
 def check_alignment_cv_zero_when_equal() -> tuple[bool, str]:
@@ -260,6 +261,38 @@ def check_group_corr_symmetric() -> tuple[bool, str]:
         f"group_corr shape {gc.shape}"
 
 
+def check_shap_additivity() -> tuple[bool, str]:
+    mat = L.build_matrix()
+    feats = L.feature_names(mat)
+    as_of = mat["target_date"].max()
+    m = L.train_horizon_model(mat, feats, horizon=7, as_of=as_of)
+    rows = mat[(mat["horizon"] == 7) & (mat["y"].notna())].head(200)
+    contrib = m.predict(rows[feats], pred_contrib=True)      # (n, n_feat + 1)
+    recon = contrib.sum(axis=1)
+    pred = m.predict(rows[feats])
+    return np.allclose(recon, pred, atol=1e-6), \
+        f"max |sum(contrib) - predict| = {np.abs(recon - pred).max():.2e} (want < 1e-6)"
+
+
+def check_train_horizon_model_dropna_y_only() -> tuple[bool, str]:
+    mat = L.build_matrix()
+    feats = L.feature_names(mat)
+    as_of = mat["target_date"].max()
+    m = L.train_horizon_model(mat, feats, horizon=7, as_of=as_of)
+    want = int(mat[(mat["horizon"] == 7) & (mat["target_date"] <= as_of)]["y"].notna().sum())
+    n_train = getattr(m, "_n_train_rows", None)
+    return n_train == want, f"trained on {n_train} rows (want {want} = dropna on y only)"
+
+
+def check_shap_global_covers_features_and_ranked() -> tuple[bool, str]:
+    mat = L.build_matrix()
+    feats = L.feature_names(mat)
+    g = L.shap_global(mat, feats, horizons=[7], sample=800)
+    ranked = g["mean_abs_shap"].is_monotonic_decreasing
+    return ranked and set(g.index) == set(feats), \
+        f"shap_global: {len(g)} features, ranked={ranked}"
+
+
 CHECKS = [
     check_alignment_cv_zero_when_equal,
     check_alignment_cv_known_spread,
@@ -288,6 +321,9 @@ CHECKS = [
     check_high_corr_pairs_dedup_and_synthetic,
     check_target_corr_ranked_and_covers_all,
     check_group_corr_symmetric,
+    check_shap_additivity,
+    check_train_horizon_model_dropna_y_only,
+    check_shap_global_covers_features_and_ranked,
 ]
 
 

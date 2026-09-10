@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import lightgbm as lgb
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -413,4 +414,61 @@ def group_corr(pearson: pd.DataFrame) -> pd.DataFrame:
                 out.loc[g1, g2] = np.nanmean(vals)
             else:
                 out.loc[g1, g2] = np.nanmean(block.values)
+    return out
+
+
+# ── Part B3 — SHAP via LightGBM native pred_contrib ─────────────────────
+def train_horizon_model(mat: pd.DataFrame, feats: list[str], horizon: int,
+                        as_of: pd.Timestamp) -> "lgb.LGBMRegressor":
+    train = mat[(mat["horizon"] == horizon) & (mat["target_date"] <= as_of)].dropna(subset=["y"])
+    w = S.make_sample_weights(train["target_date"],
+                              is_holiday=S.holiday_mask_from_matrix(train),
+                              half_life_days=C.DEFAULT_HALF_LIFE)
+    m = lgb.LGBMRegressor(**C.LGBM_PARAMS)
+    m.fit(train[feats], train["y"], sample_weight=w)
+    m._n_train_rows = int(len(train))
+    return m
+
+
+def _contrib_frame(model, X: pd.DataFrame, feats: list[str]) -> tuple[np.ndarray, float]:
+    c = model.predict(X[feats], pred_contrib=True)
+    return c[:, :-1], float(c[0, -1])            # (contribs, bias) -- bias identical per row
+
+
+def shap_global(mat: pd.DataFrame, feats: list[str], horizons: list[int],
+                sample: int = 4000, seed: int = 0) -> pd.DataFrame:
+    as_of = mat["target_date"].max()
+    rng = np.random.default_rng(seed)
+    per_h = {}
+    pooled = np.zeros(len(feats))
+    total_rows = 0
+    for h in horizons:
+        m = train_horizon_model(mat, feats, h, as_of)
+        pool = mat[(mat["horizon"] == h) & (mat["y"].notna())]
+        take = pool.iloc[rng.choice(len(pool), size=min(sample, len(pool)), replace=False)]
+        contribs, _ = _contrib_frame(m, take, feats)
+        absmean = np.abs(contribs).mean(axis=0)
+        per_h[f"mean_abs_shap_{h}"] = pd.Series(absmean, index=feats)
+        pooled += absmean * len(take)
+        total_rows += len(take)
+    out = pd.DataFrame(per_h)
+    out["mean_abs_shap"] = pooled / total_rows
+    return out.sort_values("mean_abs_shap", ascending=False)
+
+
+def shap_local(mat: pd.DataFrame, feats: list[str], horizon: int = 7) -> dict:
+    as_of = mat["target_date"].max()
+    m = train_horizon_model(mat, feats, horizon, as_of)
+    out = {}
+    for label, d in pick_sample_dates().items():
+        row = mat[(mat["target_date"] == d) & (mat["horizon"] == horizon)]
+        if row.empty:
+            continue
+        contribs, bias = _contrib_frame(m, row, feats)
+        s = pd.DataFrame({"feature_value": row[feats].iloc[0].values,
+                          "shap": contribs[0]}, index=feats)
+        s = s.reindex(s["shap"].abs().sort_values(ascending=False).index)
+        out[label] = s
+        out[f"{label}__meta__"] = pd.DataFrame(
+            {"base_value": [bias], "prediction": [float(m.predict(row[feats])[0])]})
     return out

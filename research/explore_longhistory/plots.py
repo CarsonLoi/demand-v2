@@ -188,3 +188,48 @@ def plot_target_corr(target_corr: pd.DataFrame, out: Path, top: int = 30) -> Non
                  color=NAVY, fontsize=12, fontweight="bold", loc="left")
     style_ax(ax)
     _save(fig, out)
+
+
+# ── Part B3 ─────────────────────────────────────────────────────────────
+def plot_shap_summary(mat, feats, global_table, out: Path, top: int = 25) -> None:
+    import eda_lib as L
+    as_of = mat["target_date"].max()
+    m = L.train_horizon_model(mat, feats, 7, as_of)
+    pool = mat[(mat["horizon"] == 7) & (mat["y"].notna())]
+    take = pool.sample(min(2000, len(pool)), random_state=0)
+    contribs = m.predict(take[feats], pred_contrib=True)[:, :-1]
+    sh = pd.DataFrame(contribs, columns=feats)
+    order = list(global_table.head(top).index)
+    fig, ax = plt.subplots(figsize=(10, 0.34 * len(order) + 1))
+    for i, f in enumerate(order[::-1]):
+        vals = take[f].to_numpy(dtype="float64")
+        rank = pd.Series(vals).rank(pct=True).to_numpy()
+        ax.scatter(sh[f], np.full(len(sh), i) + (rank - 0.5) * 0.7,
+                   c=rank, cmap="coolwarm", s=6, alpha=0.5, linewidths=0)
+    ax.set_yticks(range(len(order))); ax.set_yticklabels(order[::-1], fontsize=8)
+    ax.axvline(0, color=GREY, lw=1)
+    ax.set_xlabel("SHAP value (impact on predicted patron-hours)", color=GREY, fontsize=9)
+    ax.set_title("SHAP summary - horizon 7, top features (colour = feature value)",
+                 color=NAVY, fontsize=12, fontweight="bold", loc="left")
+    style_ax(ax)
+    _save(fig, out)
+
+
+def plot_shap_waterfall(local_df: pd.DataFrame, meta: pd.DataFrame, label: str, out: Path) -> None:
+    top = local_df.head(15).iloc[::-1]
+    base = float(meta["base_value"].iloc[0]); pred = float(meta["prediction"].iloc[0])
+    fig, ax = plt.subplots(figsize=(9, 6))
+    running = base
+    for i, (feat, r) in enumerate(top.iterrows()):
+        ax.barh(i, r["shap"], left=running, color=TEAL if r["shap"] >= 0 else RED)
+        running += r["shap"]
+    ax.axvline(base, color=GREY, ls="--", lw=1, label=f"base {base:,.0f}")
+    ax.axvline(pred, color=NAVY, ls="-", lw=1.4, label=f"prediction {pred:,.0f}")
+    ax.set_yticks(range(len(top)))
+    ax.set_yticklabels([f"{f} = {v:,.2f}" for f, v in zip(top.index, top['feature_value'])],
+                       fontsize=8)
+    ax.set_title(f"Why the {label} forecast landed where it did (horizon 7)",
+                 color=NAVY, fontsize=12, fontweight="bold", loc="left")
+    ax.legend(fontsize=8)
+    style_ax(ax)
+    _save(fig, out)
