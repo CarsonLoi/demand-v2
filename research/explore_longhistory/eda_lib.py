@@ -269,13 +269,13 @@ def cny_trough_by_year(df: pd.DataFrame) -> pd.DataFrame:
 def covid_timeline(df: pd.DataFrame) -> pd.DataFrame:
     d = df[(df["date"] >= "2019-01-01") & (df["date"] <= "2024-12-31")].copy()
     d["period"] = d["date"].dt.to_period("M")
+    d["_is_closure"] = ((d["floortables"] == 0) | (d["demand"] == 0)).astype(int)
     g = d.groupby("period")
     out = pd.DataFrame({
         "mean_demand": g["demand"].mean(),
         "mean_per_table": g["demand_per_table"].mean(),
         "n_days": g.size(),
-        "n_closure_days": g.apply(
-            lambda x: int(((x["floortables"] == 0) | (x["demand"] == 0)).sum())),
+        "n_closure_days": g["_is_closure"].sum(),
     })
     out.index = out.index.astype(str)
     return out
@@ -410,10 +410,11 @@ def group_corr(pearson: pd.DataFrame) -> pd.DataFrame:
             block = pearson.loc[members[g1], members[g2]].abs()
             if g1 == g2:
                 vals = (block.values[~np.eye(len(members[g1]), dtype=bool)]
-                        if len(members[g1]) > 1 else [np.nan])
-                out.loc[g1, g2] = np.nanmean(vals)
+                        if len(members[g1]) > 1 else np.array([]))
             else:
-                out.loc[g1, g2] = np.nanmean(block.values)
+                vals = block.values.ravel()
+            vals = vals[~np.isnan(vals)] if vals.size else vals
+            out.loc[g1, g2] = float(vals.mean()) if vals.size else np.nan
     return out
 
 
