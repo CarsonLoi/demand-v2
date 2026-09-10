@@ -233,6 +233,33 @@ def check_sample_tall_shape() -> tuple[bool, str]:
     return len(t) == 500 and "target_date" in t.columns, f"tall sample {t.shape}"
 
 
+def check_high_corr_pairs_dedup_and_synthetic() -> tuple[bool, str]:
+    rng = np.random.default_rng(0)
+    base = rng.normal(size=2000)
+    p = pd.DataFrame({
+        "a": base, "b": base * 2 + 1e-6 * rng.normal(size=2000),   # r ~ 1
+        "c": rng.normal(size=2000),                                 # independent
+    }).corr()
+    hp = L.high_corr_pairs(p, threshold=0.9)
+    pair = set(hp.iloc[0][["feat_a", "feat_b"]]) if len(hp) else set()
+    return len(hp) == 1 and pair == {"a", "b"}, f"high_corr_pairs -> {hp.to_dict('records')}"
+
+
+def check_target_corr_ranked_and_covers_all() -> tuple[bool, str]:
+    mat = L.build_matrix()
+    tc = L.target_corr(mat)
+    ranked = tc["spearman"].abs().dropna().is_monotonic_decreasing
+    covers = len(tc) == len(L.feature_names(mat))
+    return ranked and covers, f"target_corr: {len(tc)} rows, ranked={ranked}"
+
+
+def check_group_corr_symmetric() -> tuple[bool, str]:
+    mat = L.build_matrix()
+    gc = L.group_corr(L.corr_frames(mat)["pearson"])
+    return np.allclose(gc.values.astype(float), gc.values.astype(float).T, equal_nan=True), \
+        f"group_corr shape {gc.shape}"
+
+
 CHECKS = [
     check_alignment_cv_zero_when_equal,
     check_alignment_cv_known_spread,
@@ -258,6 +285,9 @@ CHECKS = [
     check_sample_wide_has_jan2026_and_all_features,
     check_feature_dictionary_groups_and_nonnull,
     check_sample_tall_shape,
+    check_high_corr_pairs_dedup_and_synthetic,
+    check_target_corr_ranked_and_covers_all,
+    check_group_corr_symmetric,
 ]
 
 

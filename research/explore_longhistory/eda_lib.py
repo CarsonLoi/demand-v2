@@ -355,3 +355,62 @@ def feature_dictionary(mat: pd.DataFrame) -> pd.DataFrame:
             "max": col.max(skipna=True),
         })
     return pd.DataFrame(rows).set_index("feature")
+
+
+# ── Part B2 — feature correlation ───────────────────────────────────────
+def corr_frames(mat: pd.DataFrame) -> dict:
+    feats = feature_names(mat)
+    tr = mat[mat["y"].notna()]
+    num = tr[feats].select_dtypes(include=[np.number])
+    num = num.loc[:, num.std(numeric_only=True) > 0]
+    return {"pearson": num.corr(method="pearson"),
+            "spearman": num.corr(method="spearman")}
+
+
+def high_corr_pairs(pearson: pd.DataFrame, threshold: float = 0.9) -> pd.DataFrame:
+    rows = []
+    cols = list(pearson.columns)
+    for i, a in enumerate(cols):
+        for b in cols[i + 1:]:
+            r = pearson.loc[a, b]
+            if pd.notna(r) and abs(r) >= threshold:
+                rows.append({"feat_a": a, "feat_b": b,
+                             "group_a": feature_group(a), "group_b": feature_group(b),
+                             "r": float(r)})
+    if not rows:
+        return pd.DataFrame(columns=["feat_a", "feat_b", "group_a", "group_b", "r"])
+    return (pd.DataFrame(rows).sort_values("r", key=lambda s: s.abs(), ascending=False)
+            .reset_index(drop=True))
+
+
+def target_corr(mat: pd.DataFrame) -> pd.DataFrame:
+    feats = feature_names(mat)
+    tr = mat[mat["y"].notna()]
+    y = tr["y"].astype(float)
+    rows = []
+    for f in feats:
+        col = tr[f]
+        if col.notna().sum() < 30 or col.std(skipna=True) == 0:
+            rows.append({"feature": f, "pearson": np.nan, "spearman": np.nan})
+            continue
+        rows.append({"feature": f,
+                     "pearson": float(col.corr(y, method="pearson")),
+                     "spearman": float(col.corr(y, method="spearman"))})
+    out = pd.DataFrame(rows).set_index("feature")
+    return out.reindex(out["spearman"].abs().sort_values(ascending=False).index)
+
+
+def group_corr(pearson: pd.DataFrame) -> pd.DataFrame:
+    groups = sorted({feature_group(c) for c in pearson.columns})
+    members = {g: [c for c in pearson.columns if feature_group(c) == g] for g in groups}
+    out = pd.DataFrame(index=groups, columns=groups, dtype=float)
+    for g1 in groups:
+        for g2 in groups:
+            block = pearson.loc[members[g1], members[g2]].abs()
+            if g1 == g2:
+                vals = (block.values[~np.eye(len(members[g1]), dtype=bool)]
+                        if len(members[g1]) > 1 else [np.nan])
+                out.loc[g1, g2] = np.nanmean(vals)
+            else:
+                out.loc[g1, g2] = np.nanmean(block.values)
+    return out

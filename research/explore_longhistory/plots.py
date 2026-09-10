@@ -154,3 +154,37 @@ def plot_covid_timeline(timeline: pd.DataFrame, out: Path) -> None:
                  color=NAVY, fontsize=12, fontweight="bold", loc="left")
     style_ax(ax)
     _save(fig, out)
+
+
+# ── Part B2 ─────────────────────────────────────────────────────────────
+def plot_group_corr(group_corr: pd.DataFrame, out: Path) -> None:
+    fig, ax = plt.subplots(figsize=(8, 6.5))
+    im = ax.imshow(group_corr.values.astype(float), vmin=0, vmax=1, cmap="YlGnBu")
+    ax.set_xticks(range(len(group_corr))); ax.set_yticks(range(len(group_corr)))
+    ax.set_xticklabels(group_corr.columns, rotation=45, ha="right", fontsize=8)
+    ax.set_yticklabels(group_corr.index, fontsize=8)
+    for i in range(len(group_corr)):
+        for j in range(len(group_corr)):
+            v = group_corr.values[i, j]
+            if pd.notna(v):
+                ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7,
+                        color="white" if v > 0.6 else "black")
+    ax.set_title("Mean |correlation| between feature groups", color=NAVY,
+                 fontsize=11, fontweight="bold", loc="left")
+    fig.colorbar(im, ax=ax, fraction=0.046)
+    _save(fig, out)
+
+
+def plot_target_corr(target_corr: pd.DataFrame, out: Path, top: int = 30) -> None:
+    s = target_corr["spearman"].dropna()
+    top_s = s.head(top).sort_values()
+    fig, ax = plt.subplots(figsize=(9, max(4, 0.28 * len(top_s))))
+    ax.barh(range(len(top_s)), top_s.values,
+            color=[TEAL if v >= 0 else RED for v in top_s.values])
+    ax.set_yticks(range(len(top_s))); ax.set_yticklabels(top_s.index, fontsize=8)
+    ax.axvline(0, color=GREY, lw=1)
+    ax.set_xlabel("Spearman correlation with y", color=GREY, fontsize=9)
+    ax.set_title(f"Top {top} features by |correlation| with the target",
+                 color=NAVY, fontsize=12, fontweight="bold", loc="left")
+    style_ax(ax)
+    _save(fig, out)
