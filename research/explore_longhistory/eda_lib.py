@@ -457,19 +457,55 @@ def shap_global(mat: pd.DataFrame, feats: list[str], horizons: list[int],
     return out.sort_values("mean_abs_shap", ascending=False)
 
 
-def shap_local(mat: pd.DataFrame, feats: list[str], horizon: int = 7) -> dict:
-    as_of = mat["target_date"].max()
-    m = train_horizon_model(mat, feats, horizon, as_of)
+def _local_one(m, mat, feats, target: pd.Timestamp, horizon: int,
+               actual_by_date: dict) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    row = mat[(mat["target_date"] == target) & (mat["horizon"] == horizon)]
+    if row.empty:
+        return None
+    contribs, bias = _contrib_frame(m, row, feats)
+    s = pd.DataFrame({"feature_value": row[feats].iloc[0].values, "shap": contribs[0]},
+                     index=feats)
+    s = s.reindex(s["shap"].abs().sort_values(ascending=False).index)
+    pred = float(m.predict(row[feats])[0])
+    actual = actual_by_date.get(pd.Timestamp(target), float("nan"))
+    meta = pd.DataFrame({"base_value": [bias], "prediction": [pred], "actual": [actual],
+                         "pct_error": [100 * (pred - actual) / actual if actual else float("nan")]})
+    return s, meta
+
+
+def shap_local(mat: pd.DataFrame, feats: list[str], horizon: int = 7,
+               actual_by_date: dict | None = None) -> dict:
+    """Full-history explanation: as_of = data max. Explains what the deployed
+    model learned; NOT a walk-forward forecast (the model has seen every
+    later date). See shap_local_walkforward for a blind-of-the-future view."""
+    actual_by_date = actual_by_date or {}
+    m = train_horizon_model(mat, feats, horizon, mat["target_date"].max())
     out = {}
     for label, d in pick_sample_dates().items():
-        row = mat[(mat["target_date"] == d) & (mat["horizon"] == horizon)]
-        if row.empty:
+        got = _local_one(m, mat, feats, d, horizon, actual_by_date)
+        if got is None:
             continue
-        contribs, bias = _contrib_frame(m, row, feats)
-        s = pd.DataFrame({"feature_value": row[feats].iloc[0].values,
-                          "shap": contribs[0]}, index=feats)
-        s = s.reindex(s["shap"].abs().sort_values(ascending=False).index)
-        out[label] = s
-        out[f"{label}__meta__"] = pd.DataFrame(
-            {"base_value": [bias], "prediction": [float(m.predict(row[feats])[0])]})
+        out[label], out[f"{label}__meta__"] = got
+    return out
+
+
+def shap_local_walkforward(mat: pd.DataFrame, feats: list[str], labels: list[str],
+                           horizon: int = 7, actual_by_date: dict | None = None) -> dict:
+    """Honest walk-forward explanation for specific sample dates: the model
+    trains only on data up to that date's forecast origin (target - horizon -
+    1), so it is blind to everything after. This is the view that can show
+    the mid-January contamination the full-history model cannot."""
+    actual_by_date = actual_by_date or {}
+    picks = pick_sample_dates()
+    out = {}
+    for label in labels:
+        if label not in picks:
+            continue
+        target = picks[label]
+        as_of = target - pd.Timedelta(days=horizon + 1)
+        m = train_horizon_model(mat, feats, horizon, as_of)
+        got = _local_one(m, mat, feats, target, horizon, actual_by_date)
+        if got is None:
+            continue
+        out[label], out[f"{label}__meta__"] = got
     return out

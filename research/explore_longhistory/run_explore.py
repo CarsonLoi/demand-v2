@@ -122,17 +122,40 @@ def main() -> int:
 
     if not a.skip_shap:
         horizons = list(range(1, 29)) if a.horizons == "all" else [int(x) for x in a.horizons.split(",")]
+        actual_by_date = dict(zip(d["date"], d["demand"].astype(float)))
         g = L.shap_global(mat, feats, horizons, sample=a.shap_sample)
         g.to_csv(OUT / "shap_importance.csv")
         P.plot_shap_summary(mat, feats, g, OUT / "shap_summary.png")
-        loc = L.shap_local(mat, feats, horizon=7)
+
+        loc = L.shap_local(mat, feats, horizon=7, actual_by_date=actual_by_date)
         for label in L.pick_sample_dates():
             if label in loc:
                 loc[label].to_csv(OUT / f"shap_local_{label}.csv")
                 P.plot_shap_waterfall(loc[label], loc[f"{label}__meta__"], label,
                                       OUT / f"shap_waterfall_{label}.png")
+
+        wf = L.shap_local_walkforward(mat, feats, ["jan2026_a", "jan2026_b"],
+                                      horizon=7, actual_by_date=actual_by_date)
+        for label in ("jan2026_a", "jan2026_b"):
+            if label in wf:
+                wf[label].to_csv(OUT / f"shap_local_walkforward_{label}.csv")
+                P.plot_shap_waterfall(wf[label], wf[f"{label}__meta__"],
+                                      f"{label} (walk-forward)",
+                                      OUT / f"shap_waterfall_walkforward_{label}.png")
+
         print("SHAP top 10 (mean |shap|, pooled horizons):")
         print(g["mean_abs_shap"].head(10).to_string())
+        print("\nsample-day accuracy (horizon 7):")
+        for label in L.pick_sample_dates():
+            if label in loc:
+                mt = loc[f"{label}__meta__"].iloc[0]
+                print(f"  {label:16s} actual={mt['actual']:7.0f}  pred={mt['prediction']:7.0f}  "
+                      f"err={mt['pct_error']:+.1f}%")
+        for label in ("jan2026_a", "jan2026_b"):
+            if label in wf:
+                mt = wf[f"{label}__meta__"].iloc[0]
+                print(f"  {label:16s} (walk-fwd) actual={mt['actual']:7.0f}  "
+                      f"pred={mt['prediction']:7.0f}  err={mt['pct_error']:+.1f}%")
 
     _write_report_skeleton(OUT, ma, align, rec)
     print(f"\n-> {OUT}")
