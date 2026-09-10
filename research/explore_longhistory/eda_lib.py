@@ -125,3 +125,32 @@ def describe_by_regime(df: pd.DataFrame, cols: list[str] | None = None) -> pd.Da
 def closure_days(df: pd.DataFrame) -> pd.DataFrame:
     m = (df["floortables"] == 0) | (df["demand"] == 0)
     return df.loc[m, ["date", "demand", "floortables"]].reset_index(drop=True)
+
+
+# ── Part A2 — monthly seasonality by year + alignment ────────────────────
+def monthly_index_by_year(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.copy()
+    d["_year"] = d["date"].dt.year
+    d["_month"] = d["date"].dt.month
+    d = d[d["_year"].isin(CLEAN_YEARS)]
+    rows = {}
+    for yr, sub in d.groupby("_year"):
+        ann = sub["demand_per_table"].mean()
+        if ann == 0 or np.isnan(ann):
+            continue
+        m = sub.groupby("_month")["demand_per_table"].mean() / ann
+        rows[int(yr)] = m.reindex(range(1, 13))
+    return pd.DataFrame(rows).T.sort_index()
+
+
+def monthly_alignment(index_table: pd.DataFrame) -> dict:
+    per_month_std = index_table.std(axis=0)
+    shape_corr = index_table.T.corr()               # year x year, over the 12-vectors
+    n = len(shape_corr)
+    offdiag = shape_corr.values[~np.eye(n, dtype=bool)] if n > 1 else np.array([np.nan])
+    return {
+        "per_month_std": per_month_std,
+        "shape_corr": shape_corr,
+        "mean_offdiag_corr": float(np.nanmean(offdiag)),
+        "unstable_months": [int(m) for m, v in per_month_std.items() if v > 0.10],
+    }

@@ -101,6 +101,34 @@ def check_describe_by_dow_seven_rows() -> tuple[bool, str]:
     return len(t) == 7, f"dow table has {len(t)} rows (want 7)"
 
 
+def check_monthly_index_flat_series_is_one() -> tuple[bool, str]:
+    dates = pd.date_range("2015-01-01", "2016-12-31")
+    df = pd.DataFrame({"date": dates, "demand": 100.0, "floortables": 10.0})
+    df["demand_per_table"] = df["demand"] / df["floortables"].clip(lower=1)
+    df["year"] = df["date"].dt.year
+    t = L.monthly_index_by_year(df)
+    return np.allclose(t.values, 1.0), \
+        f"flat series -> index range [{t.values.min():.3f}, {t.values.max():.3f}] (want all 1.0)"
+
+
+def check_monthly_index_doubled_month() -> tuple[bool, str]:
+    dates = pd.date_range("2015-01-01", "2015-12-31")
+    df = pd.DataFrame({"date": dates, "demand": 100.0, "floortables": 10.0})
+    df.loc[df["date"].dt.month == 6, "demand"] = 200.0
+    df["demand_per_table"] = df["demand"] / df["floortables"].clip(lower=1)
+    df["year"] = df["date"].dt.year
+    t = L.monthly_index_by_year(df)
+    want_june = 20.0 / (df["demand_per_table"].mean())
+    return abs(t.loc[2015, 6] - want_june) < 1e-6, \
+        f"June index = {t.loc[2015,6]:.4f} (want {want_june:.4f})"
+
+
+def check_monthly_no_covid_years() -> tuple[bool, str]:
+    t = L.monthly_index_by_year(L.load_frames())
+    bad = L.COVID_YEARS & set(t.index)
+    return not bad, f"covid years in monthly table: {bad or 'none'}"
+
+
 CHECKS = [
     check_alignment_cv_zero_when_equal,
     check_alignment_cv_known_spread,
@@ -112,6 +140,9 @@ CHECKS = [
     check_closure_days_match_known,
     check_describe_by_year_all_years_present,
     check_describe_by_dow_seven_rows,
+    check_monthly_index_flat_series_is_one,
+    check_monthly_index_doubled_month,
+    check_monthly_no_covid_years,
 ]
 
 

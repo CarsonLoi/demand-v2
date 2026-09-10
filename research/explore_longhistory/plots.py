@@ -50,3 +50,37 @@ def plot_per_table_by_year(df: pd.DataFrame, out: Path) -> None:
     ax.legend(fontsize=8, ncol=4)
     style_ax(ax)
     _save(fig, out)
+
+
+# ── Part A2 ─────────────────────────────────────────────────────────────
+def plot_monthly_seasonality(index_table: pd.DataFrame, out: Path) -> None:
+    fig, ax = plt.subplots(figsize=(12, 5))
+    for yr in index_table.index:
+        ax.plot(range(1, 13), index_table.loc[yr].values, "o-", ms=3.5, lw=1.6,
+                color=YEAR_COLOURS.get(int(yr), GREY), label=str(int(yr)))
+    ax.axhline(1.0, color=GREY, lw=1, ls="--")
+    ax.set_xticks(range(1, 13))
+    ax.set_xlabel("month", color=GREY, fontsize=9)
+    ax.set_ylabel("monthly index (1.0 = year's average)", color=GREY, fontsize=9)
+    ax.set_title("Monthly seasonality by year — clean years only",
+                 color=NAVY, fontsize=12, fontweight="bold", loc="left")
+    ax.legend(fontsize=8, ncol=5)
+    style_ax(ax)
+    _save(fig, out)
+
+
+def plot_monthly_shape_corr(shape_corr: pd.DataFrame, out: Path) -> None:
+    fig, ax = plt.subplots(figsize=(6.5, 5.5))
+    im = ax.imshow(shape_corr.values, vmin=0, vmax=1, cmap="YlGnBu")
+    ax.set_xticks(range(len(shape_corr)))
+    ax.set_yticks(range(len(shape_corr)))
+    ax.set_xticklabels([str(int(y)) for y in shape_corr.columns], rotation=45, fontsize=8)
+    ax.set_yticklabels([str(int(y)) for y in shape_corr.index], fontsize=8)
+    for i in range(len(shape_corr)):
+        for j in range(len(shape_corr)):
+            ax.text(j, i, f"{shape_corr.values[i, j]:.2f}", ha="center", va="center",
+                    fontsize=7, color="white" if shape_corr.values[i, j] > 0.6 else "black")
+    ax.set_title("Year-to-year correlation of the 12-month shape",
+                 color=NAVY, fontsize=11, fontweight="bold", loc="left")
+    fig.colorbar(im, ax=ax, fraction=0.046)
+    _save(fig, out)
