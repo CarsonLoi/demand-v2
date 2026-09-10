@@ -129,6 +129,68 @@ def check_monthly_no_covid_years() -> tuple[bool, str]:
     return not bad, f"covid years in monthly table: {bad or 'none'}"
 
 
+def _synth_holiday_frame():
+    """A flat 100/day series with a known holiday window and a known dip
+    just before it, so the baseline and multiplier are hand-checkable."""
+    dates = pd.date_range("2015-01-01", "2015-12-31")
+    df = pd.DataFrame({"date": dates, "demand": 100.0, "floortables": 10.0})
+    win = pd.date_range("2015-06-10", "2015-06-16")
+    df.loc[df["date"].isin(win), "demand"] = 200.0
+    # POISON: inside the window and after it -- neither may enter the baseline
+    df.loc[df["date"] == pd.Timestamp("2015-07-01"), "demand"] = 9999.0
+    df["demand_per_table"] = df["demand"] / df["floortables"].clip(lower=1)
+    df["year"] = df["date"].dt.year
+    df["month"] = df["date"].dt.month
+    df["dow"] = df["date"].dt.weekday
+    return df, list(win)
+
+
+def check_pre_holiday_baseline_is_leadin_only() -> tuple[bool, str]:
+    df, win = _synth_holiday_frame()
+    orig = L.holiday_date_set
+    L.holiday_date_set = lambda: set(win)                     # type: ignore
+    try:
+        b = L.pre_holiday_baseline(df, win)
+    finally:
+        L.holiday_date_set = orig                             # type: ignore
+    ok = abs(b["demand"] - 100.0) < 1e-9 and b["n_days"] >= 5
+    return ok, f"baseline demand = {b['demand']} (want 100.0 -- no window/after day leaked), n={b['n_days']}"
+
+
+def check_pre_holiday_baseline_widens_and_nans() -> tuple[bool, str]:
+    dates = pd.date_range("2015-05-01", "2015-06-16")
+    df = pd.DataFrame({"date": dates, "demand": 0.0, "floortables": 10.0})
+    win = list(pd.date_range("2015-06-10", "2015-06-16"))
+    df["demand_per_table"] = 0.0
+    orig = L.holiday_date_set
+    L.holiday_date_set = lambda: set(win)                     # type: ignore
+    try:
+        b = L.pre_holiday_baseline(df, win)
+    finally:
+        L.holiday_date_set = orig                             # type: ignore
+    return np.isnan(b["demand"]) and b["n_days"] < 5, \
+        f"all-closure lead-in -> demand={b['demand']}, n={b['n_days']} (want nan, <5)"
+
+
+def check_holiday_multiplier_no_covid() -> tuple[bool, str]:
+    t = L.holiday_multiplier_by_year(L.load_frames())
+    bad = L.COVID_YEARS & set(t["year"].astype(int))
+    return not bad, f"covid years in holiday multiplier table: {bad or 'none'}"
+
+
+def check_holiday_alignment_verdict_columns() -> tuple[bool, str]:
+    t = L.holiday_alignment(L.holiday_multiplier_by_year(L.load_frames()))
+    need = {"n_clean_years", "cv_per_table", "cv_raw", "verdict"}
+    return need.issubset(t.columns), f"holiday_alignment columns: {list(t.columns)}"
+
+
+def check_cny_trough_below_one() -> tuple[bool, str]:
+    t = L.cny_trough_by_year(L.load_frames())
+    vals = t["min_mult_value"].dropna()
+    return (vals < 1.0).all() and len(vals) >= 3, \
+        f"pre-CNY min multipliers: {vals.round(2).to_dict()}"
+
+
 CHECKS = [
     check_alignment_cv_zero_when_equal,
     check_alignment_cv_known_spread,
@@ -143,6 +205,11 @@ CHECKS = [
     check_monthly_index_flat_series_is_one,
     check_monthly_index_doubled_month,
     check_monthly_no_covid_years,
+    check_pre_holiday_baseline_is_leadin_only,
+    check_pre_holiday_baseline_widens_and_nans,
+    check_holiday_multiplier_no_covid,
+    check_holiday_alignment_verdict_columns,
+    check_cny_trough_below_one,
 ]
 
 

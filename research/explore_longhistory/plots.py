@@ -84,3 +84,57 @@ def plot_monthly_shape_corr(shape_corr: pd.DataFrame, out: Path) -> None:
                  color=NAVY, fontsize=11, fontweight="bold", loc="left")
     fig.colorbar(im, ax=ax, fraction=0.046)
     _save(fig, out)
+
+
+# ── Part A3 ─────────────────────────────────────────────────────────────
+def plot_holiday_impact(mult_table: pd.DataFrame, out: Path) -> None:
+    hols = sorted(mult_table["holiday"].unique())
+    fig, axes = plt.subplots(3, 3, figsize=(15, 11))
+    for ax, name in zip(axes.flat, hols):
+        sub = mult_table[mult_table["holiday"] == name].sort_values("year")
+        clean = sub[sub["year"].isin(YEAR_COLOURS)]
+        ax.bar(clean["year"].astype(str), clean["mult_per_table"],
+               color=[YEAR_COLOURS.get(int(y), GREY) for y in clean["year"]])
+        ax.axhline(1.0, color=GREY, lw=1, ls="--")
+        ax.set_title(name, color=NAVY, fontsize=10, fontweight="bold", loc="left")
+        ax.tick_params(axis="x", rotation=45, labelsize=7)
+        style_ax(ax)
+    for ax in axes.flat[len(hols):]:
+        ax.set_visible(False)
+    fig.suptitle("Holiday demand multiplier vs pre-holiday baseline (per table), clean years",
+                 color=NAVY, fontsize=13, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    _save(fig, out)
+
+
+def plot_holiday_offset_shape(shape_by_holiday: dict, out: Path) -> None:
+    names = list(shape_by_holiday)
+    fig, axes = plt.subplots(len(names), 1, figsize=(12, 3.4 * len(names)), squeeze=False)
+    for ax, name in zip(axes[:, 0], names):
+        tbl = shape_by_holiday[name]
+        for yr in tbl.index:
+            ax.plot(tbl.columns, tbl.loc[yr].values, "o-", ms=3, lw=1.5,
+                    color=YEAR_COLOURS.get(int(yr), GREY), label=str(int(yr)))
+        ax.axhline(1.0, color=GREY, lw=1, ls="--")
+        ax.set_title(f"{name} - demand/table by day offset, / pre-holiday baseline",
+                     color=NAVY, fontsize=10, fontweight="bold", loc="left")
+        ax.set_xlabel("days from anchor", color=GREY, fontsize=8)
+        ax.legend(fontsize=7, ncol=5)
+        style_ax(ax)
+    fig.tight_layout()
+    _save(fig, out)
+
+
+def plot_cny_trough(trough_table: pd.DataFrame, out: Path) -> None:
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    yrs = [int(y) for y in trough_table.index]
+    ax.bar([str(y) for y in yrs], trough_table["min_mult_value"],
+           color=[YEAR_COLOURS.get(y, GREY) for y in yrs])
+    ax.axhline(1.0, color=GREY, lw=1, ls="--")
+    for x, (v, o) in enumerate(zip(trough_table["min_mult_value"], trough_table["min_mult_offset"])):
+        ax.text(x, v + 0.01, f"d{int(o)}", ha="center", fontsize=8, color=GREY)
+    ax.set_ylabel("min demand/table in CNY d-7..d-1  / baseline", color=GREY, fontsize=9)
+    ax.set_title("Pre-CNY trough depth by year - the mid-January failure mode",
+                 color=NAVY, fontsize=12, fontweight="bold", loc="left")
+    style_ax(ax)
+    _save(fig, out)

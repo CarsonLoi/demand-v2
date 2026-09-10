@@ -154,3 +154,111 @@ def monthly_alignment(index_table: pd.DataFrame) -> dict:
         "mean_offdiag_corr": float(np.nanmean(offdiag)),
         "unstable_months": [int(m) for m, v in per_month_std.items() if v > 0.10],
     }
+
+
+# ── Part A3 — holiday impact by year + alignment ─────────────────────────
+WIDE_WINDOW_HOLIDAYS = ["CNY", "GoldenWeek", "Labour", "Christmas", "Easter", "DragonBoat"]
+
+
+def holiday_windows_by_year() -> dict[tuple[str, int], list[pd.Timestamp]]:
+    out: dict[tuple[str, int], list[pd.Timestamp]] = {}
+    with F.extended_holidays():
+        for name, anchors in S.HOLIDAY_ANCHORS.items():
+            ws, we = S.HOLIDAY_WINDOWS[name]
+            for a in anchors:
+                dates = [a + pd.Timedelta(days=k) for k in range(ws, we + 1)]
+                out[(name, int(a.year))] = dates
+    return out
+
+
+def pre_holiday_baseline(df: pd.DataFrame, window_dates, *, min_days: int = 5,
+                         widen: tuple[int, ...] = (28, 56, 84)) -> dict:
+    start = min(pd.Timestamp(d) for d in window_dates)
+    normal = df.loc[normal_day_mask(df)]
+    for lb in widen:
+        lo = start - pd.Timedelta(days=lb)
+        sub = normal[(normal["date"] < start) & (normal["date"] >= lo)]
+        if len(sub) >= min_days:
+            return {"demand": float(sub["demand"].mean()),
+                    "demand_per_table": float(sub["demand_per_table"].mean()),
+                    "n_days": int(len(sub)), "lookback_used": lb}
+    sub = normal[(normal["date"] < start) & (normal["date"] >= start - pd.Timedelta(days=widen[-1]))]
+    return {"demand": float("nan"), "demand_per_table": float("nan"),
+            "n_days": int(len(sub)), "lookback_used": None}
+
+
+def holiday_multiplier_by_year(df: pd.DataFrame) -> pd.DataFrame:
+    wins = holiday_windows_by_year()
+    dm = dict(zip(df["date"], df["demand"].astype(float)))
+    dpt = dict(zip(df["date"], df["demand_per_table"].astype(float)))
+    rows = []
+    for (name, year), dates in sorted(wins.items()):
+        if year not in CLEAN_YEARS:          # COVID years -> the separate A4 section
+            continue
+        in_range = [d for d in dates if d in dm]
+        if not in_range:
+            continue
+        b = pre_holiday_baseline(df, dates)
+        w_raw = np.nanmean([dm[d] for d in in_range])
+        w_pt = np.nanmean([dpt[d] for d in in_range])
+        rows.append({
+            "holiday": name, "year": year, "n_window_days": len(in_range),
+            "baseline_n_days": b["n_days"], "baseline_lookback": b["lookback_used"],
+            "mult_raw": w_raw / b["demand"] if b["demand"] else np.nan,
+            "mult_per_table": w_pt / b["demand_per_table"] if b["demand_per_table"] else np.nan,
+        })
+    return pd.DataFrame(rows)
+
+
+def holiday_offset_shape_by_year(df: pd.DataFrame, holiday: str) -> pd.DataFrame:
+    with F.extended_holidays():
+        ws, we = S.HOLIDAY_WINDOWS[holiday]
+        anchors = list(S.HOLIDAY_ANCHORS[holiday])
+    dpt = dict(zip(df["date"], df["demand_per_table"].astype(float)))
+    offsets = list(range(ws, we + 1))
+    rows = {}
+    for a in anchors:
+        yr = int(a.year)
+        if yr not in CLEAN_YEARS:
+            continue
+        dates = [a + pd.Timedelta(days=k) for k in offsets]
+        b = pre_holiday_baseline(df, dates)
+        base = b["demand_per_table"]
+        if not base or np.isnan(base):
+            continue
+        rows[yr] = pd.Series(
+            {k: (dpt.get(a + pd.Timedelta(days=k), np.nan) / base) for k in offsets})
+    return pd.DataFrame(rows).T.sort_index()
+
+
+def holiday_alignment(mult_table: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for name, sub in mult_table.groupby("holiday"):
+        clean = sub[sub["year"].isin(CLEAN_YEARS)]
+        cv_pt = alignment_cv(clean["mult_per_table"])
+        n = int(clean["mult_per_table"].notna().sum())
+        if n < 3:
+            verdict = "insufficient"
+        elif not np.isnan(cv_pt) and cv_pt < 0.10:
+            verdict = "consistent"
+        else:
+            verdict = "variable"
+        rows.append({
+            "holiday": name, "n_clean_years": n,
+            "cv_per_table": cv_pt, "cv_raw": alignment_cv(clean["mult_raw"]),
+            "min_year_mult": clean["mult_per_table"].min(),
+            "max_year_mult": clean["mult_per_table"].max(),
+            "verdict": verdict,
+        })
+    return pd.DataFrame(rows).set_index("holiday").sort_values("cv_per_table")
+
+
+def cny_trough_by_year(df: pd.DataFrame) -> pd.DataFrame:
+    shape = holiday_offset_shape_by_year(df, "CNY")
+    pre = [c for c in shape.columns if -7 <= c <= -1]
+    rows = {}
+    for yr in shape.index:
+        s = shape.loc[yr, pre].astype(float)
+        if s.notna().any():
+            rows[int(yr)] = {"min_mult_offset": int(s.idxmin()), "min_mult_value": float(s.min())}
+    return pd.DataFrame(rows).T
