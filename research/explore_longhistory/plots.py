@@ -29,3 +29,24 @@ def _save(fig, out: Path) -> None:
     fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     print(f"  -> {out}")
+
+
+# ── Part A1 ─────────────────────────────────────────────────────────────
+def plot_per_table_by_year(df: pd.DataFrame, out: Path) -> None:
+    """Monthly mean demand-per-table, one line per year (all years shown)."""
+    d = df.copy()
+    d["ym"] = d["date"].dt.to_period("M")
+    g = d.groupby([d["date"].dt.year, d["date"].dt.month])["demand_per_table"].mean()
+    fig, ax = plt.subplots(figsize=(13, 5))
+    for yr in sorted({i[0] for i in g.index}):
+        sub = g.loc[yr]
+        ax.plot(sub.index, sub.values, "o-", ms=3, lw=1.5,
+                color=YEAR_COLOURS.get(yr, GREY), label=str(yr),
+                alpha=0.55 if yr in (2020, 2021, 2022) else 1.0)
+    ax.set_xlabel("month", color=GREY, fontsize=9)
+    ax.set_ylabel("mean demand / table", color=GREY, fontsize=9)
+    ax.set_title("Demand per table by month and year (faded = COVID years)",
+                 color=NAVY, fontsize=12, fontweight="bold", loc="left")
+    ax.legend(fontsize=8, ncol=4)
+    style_ax(ax)
+    _save(fig, out)

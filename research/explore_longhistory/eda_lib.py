@@ -82,3 +82,46 @@ def feature_group(name: str) -> str:
         if pat.match(name):
             return group
     return "other"
+
+
+# ── Part A1 — descriptive statistics ─────────────────────────────────────
+def describe_series(df: pd.DataFrame, col: str) -> pd.Series:
+    s = df[col].astype("float64")
+    full = pd.date_range(df["date"].min(), df["date"].max())
+    return pd.Series({
+        "count": int(s.notna().sum()),
+        "span_days": len(full),
+        "gaps": int(len(full) - df["date"].nunique()),
+        "min": s.min(), "p10": s.quantile(0.10), "median": s.median(),
+        "mean": s.mean(), "p90": s.quantile(0.90), "max": s.max(),
+        "std": s.std(), "cv": s.std() / s.mean() if s.mean() else np.nan,
+        "skew": s.skew(), "kurtosis": s.kurt(),
+    })
+
+
+def describe_by(df: pd.DataFrame, by: str, cols: list[str]) -> pd.DataFrame:
+    g = df.groupby(by)
+    out = pd.DataFrame(index=sorted(df[by].unique()))
+    for c in cols:
+        out[f"{c}_mean"] = g[c].mean()
+        out[f"{c}_std"] = g[c].std()
+        out[f"{c}_cv"] = g[c].std() / g[c].mean()
+        out[f"{c}_min"] = g[c].min()
+        out[f"{c}_max"] = g[c].max()
+    out["n"] = g.size()
+    out.index.name = by
+    return out
+
+
+def describe_by_regime(df: pd.DataFrame, cols: list[str] | None = None) -> pd.DataFrame:
+    cols = cols or ["demand", "demand_per_table"]
+    d = df.copy()
+    d["regime"] = d["date"].map(C.regime_of)
+    order = [r[0] for r in C.REGIMES]
+    t = describe_by(d, "regime", cols)
+    return t.reindex([r for r in order if r in t.index])
+
+
+def closure_days(df: pd.DataFrame) -> pd.DataFrame:
+    m = (df["floortables"] == 0) | (df["demand"] == 0)
+    return df.loc[m, ["date", "demand", "floortables"]].reset_index(drop=True)

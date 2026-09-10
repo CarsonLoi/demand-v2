@@ -71,6 +71,36 @@ def check_normal_day_mask_excludes_holidays() -> tuple[bool, str]:
                           else "no holiday-window day is marked normal")
 
 
+def check_describe_series_gaps_zero() -> tuple[bool, str]:
+    d = L.load_frames()
+    s = L.describe_series(d, "demand")
+    return s["gaps"] == 0, f"gaps in daily series = {s['gaps']} (want 0)"
+
+
+def check_closure_days_match_known() -> tuple[bool, str]:
+    d = L.load_frames()
+    cl = set(pd.to_datetime(L.closure_days(d)["date"]).dt.date)
+    known = {pd.Timestamp("2018-09-16").date()}
+    known |= {x.date() for x in pd.date_range("2020-02-05", "2020-02-19")}
+    known |= {x.date() for x in pd.date_range("2022-07-11", "2022-07-22")}
+    missing = known - cl
+    return not missing, (f"known closures not detected: {sorted(missing)[:3]}..." if missing
+                         else f"{len(cl)} closure/zero days, all known closures present")
+
+
+def check_describe_by_year_all_years_present() -> tuple[bool, str]:
+    d = L.load_frames()
+    t = L.describe_by(d, "year", ["demand_per_table"])
+    yrs = set(t.index.astype(int))
+    return {2015, 2020, 2026}.issubset(yrs), f"years in table: {sorted(yrs)}"
+
+
+def check_describe_by_dow_seven_rows() -> tuple[bool, str]:
+    d = L.load_frames()
+    t = L.describe_by(d, "dow", ["demand"])
+    return len(t) == 7, f"dow table has {len(t)} rows (want 7)"
+
+
 CHECKS = [
     check_alignment_cv_zero_when_equal,
     check_alignment_cv_known_spread,
@@ -78,6 +108,10 @@ CHECKS = [
     check_feature_group_known_names,
     check_load_frames_shape,
     check_normal_day_mask_excludes_holidays,
+    check_describe_series_gaps_zero,
+    check_closure_days_match_known,
+    check_describe_by_year_all_years_present,
+    check_describe_by_dow_seven_rows,
 ]
 
 
